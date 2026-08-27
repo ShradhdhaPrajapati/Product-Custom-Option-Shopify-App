@@ -1,0 +1,364 @@
+<script>
+  (function () {
+    const ROOT_CLASS = 'custom-cart-options';
+    const CDN_FILE_RE = /https:\/\/cdn\.shopify\.com\/s\/files\/(?:(?!https:\/\/cdn\.shopify\.com)[^\s<>"'])+/g;
+
+    function escapeAttributeValue(value) {
+      return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    }
+
+    function isVisibleProperty(key, value) {
+      return key && !key.startsWith('_') && value !== null && value !== undefined && String(value).trim() !== '';
+    }
+
+    function normalizeValues(value) {
+      if (Array.isArray(value)) return value.filter((item) => String(item).trim() !== '');
+      return String(value)
+        .split(/\s*,\s*/)
+        .filter(Boolean);
+    }
+
+    function getFileName(url, index) {
+      try {
+        const parsedUrl = new URL(url);
+        const pathName = parsedUrl.pathname.split('/').pop() || '';
+        return decodeURIComponent(pathName) || `File ${index + 1}`;
+      } catch (error) {
+        return `File ${index + 1}`;
+      }
+    }
+
+    function findCartLine(item, index) {
+      const escapedKey = escapeAttributeValue(item.key);
+      const selectors = [
+        `input[data-quantity-line-key="${escapedKey}"]`,
+        `[data-cart-item-key="${escapedKey}"]`,
+        `[data-line-item-key="${escapedKey}"]`,
+        `[data-key="${escapedKey}"]`,
+        `#CartItem-${index + 1}`,
+        `#cart-item-${index + 1}`,
+      ];
+
+      for (const selector of selectors) {
+        const element = document.querySelector(selector);
+        if (element) return element.closest('.cart-item') || element;
+      }
+
+      const lines = document.querySelectorAll('#main-cart-items .cart-item, .cart-items .cart-item, tr.cart-item');
+      return lines[index] || null;
+    }
+
+    function findDetailsContainer(line) {
+      return (
+        line.querySelector('.cart-item__details') ||
+        line.querySelector('.cart__item-details') ||
+        line.querySelector('.cart-item-details') ||
+        line
+      );
+    }
+
+    function hideThemePropertyOutput(details) {
+      details.querySelectorAll('dl').forEach((element) => {
+        if (!element.classList.contains(ROOT_CLASS)) {
+          element.style.display = 'none';
+          element.setAttribute('data-custom-cart-hidden', 'true');
+        }
+      });
+    }
+
+    function createFilePreview(values) {
+      const urls = values.flatMap((value) => String(value).match(CDN_FILE_RE) || []);
+      if (!urls.length) return null;
+
+      const wrapper = document.createElement('div');
+      wrapper.className = 'custom-cart-files';
+
+      urls.forEach((url, index) => {
+        const cleanUrl = url.split('?')[0];
+        const isImage = /\.(jpeg|jpg|png|gif|webp|avif|svg)$/i.test(cleanUrl);
+        const link = document.createElement('a');
+        link.href = url;
+        link.target = '_blank';
+        link.rel = 'noopener';
+        link.className = isImage ? 'custom-cart-file-thumb' : 'custom-cart-file-link';
+        link.title = getFileName(url, index);
+
+        if (isImage) {
+          const img = document.createElement('img');
+          img.src = url;
+          img.alt = getFileName(url, index);
+          link.appendChild(img);
+        } else {
+          const icon = document.createElement('span');
+          icon.className = 'custom-cart-file-icon';
+          icon.textContent = 'File';
+
+          const name = document.createElement('span');
+          name.className = 'custom-cart-file-name';
+          name.textContent = getFileName(url, index);
+
+          link.appendChild(icon);
+          link.appendChild(name);
+        }
+
+        wrapper.appendChild(link);
+      });
+
+      return wrapper;
+    }
+
+    function parseCustomOptionData(properties) {
+      if (!properties) return [];
+      const raw = properties._custom_option_data || properties._customOptionData;
+      if (!raw) return [];
+      try {
+        let parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        if (typeof parsed === 'string') {
+          try {
+            parsed = JSON.parse(parsed);
+          } catch (e) {}
+        }
+        if (parsed && Array.isArray(parsed.options)) {
+          return parsed.options;
+        }
+      } catch (error) {}
+      return [];
+    }
+
+    function findMatchingOption(addonOptions, key, val) {
+      if (!Array.isArray(addonOptions) || !addonOptions.length) return null;
+
+      const cleanKey = String(key || '').trim().toLowerCase();
+      const cleanVal = String(val || '').trim().toLowerCase();
+
+      // 1. Strict name & value match
+      let match = addonOptions.find((opt) => {
+        if (!opt) return false;
+        const optName = String(opt.name || '').trim().toLowerCase();
+        const optVal = String(opt.value || '').trim().toLowerCase();
+        return optName === cleanKey && optVal === cleanVal;
+      });
+      if (match) return match;
+
+      // 2. Loose name match & value match
+      match = addonOptions.find((opt) => {
+        if (!opt) return false;
+        const optName = String(opt.name || '').trim().toLowerCase();
+        const optVal = String(opt.value || '').trim().toLowerCase();
+        return optVal === cleanVal && (optName.includes(cleanKey) || cleanKey.includes(optName));
+      });
+      if (match) return match;
+
+      // 3. Unique value match fallback
+      const valMatches = addonOptions.filter(
+        (opt) => opt && String(opt.value || '').trim().toLowerCase() === cleanVal
+      );
+      if (valMatches.length === 1) {
+        return valMatches[0];
+      }
+
+      return null;
+    }
+
+    function createPropertyList(properties) {
+      const list = document.createElement('div');
+      list.className = ROOT_CLASS;
+      const addonOptions = parseCustomOptionData(properties);
+
+      Object.entries(properties).forEach(([key, rawValue]) => {
+        if (!isVisibleProperty(key, rawValue)) return;
+
+        const values = normalizeValues(rawValue);
+        if (!values.length) return;
+
+        const row = document.createElement('div');
+        row.className = 'custom-cart-options__row';
+
+        const label = document.createElement('div');
+        label.className = 'custom-cart-options__label';
+        label.textContent = key + ':';
+
+        const value = document.createElement('div');
+        value.className = 'custom-cart-options__value';
+
+        const filePreview = createFilePreview(values);
+        if (filePreview) {
+          row.classList.add('files-ui');
+          value.appendChild(filePreview);
+        } else {
+          const formattedValues = values.map((val) => {
+            const match = findMatchingOption(addonOptions, key, val);
+            const priceNum = match ? parseFloat(match.price) : NaN;
+            if (!isNaN(priceNum) && priceNum > 0) {
+              return `${val} (+$${priceNum.toFixed(2)})`;
+            }
+            return val;
+          });
+          value.textContent = formattedValues.join(', ');
+        }
+
+        row.appendChild(label);
+        row.appendChild(value);
+        list.appendChild(row);
+      });
+
+      return list.children.length ? list : null;
+    }
+
+    function renderCartOptions(cart) {
+      if (!cart || !Array.isArray(cart.items)) return;
+
+      cart.items.forEach((item, index) => {
+        const line = findCartLine(item, index);
+        if (!line) return;
+
+        const properties = item.properties || {};
+        const signature = 'v2:' + JSON.stringify(properties);
+        const existing = line.querySelector(`.${ROOT_CLASS}`);
+        if (existing && existing.dataset.signature === signature) return;
+
+        line.querySelectorAll(`.${ROOT_CLASS}`).forEach((element) => element.remove());
+
+        const list = createPropertyList(properties);
+        if (!list) return;
+
+        list.dataset.signature = signature;
+        const details = findDetailsContainer(line);
+        hideThemePropertyOutput(details);
+        details.appendChild(list);
+      });
+    }
+
+    let renderTimer;
+    function initCartUI() {
+      clearTimeout(renderTimer);
+      renderTimer = setTimeout(function () {
+        fetch('/cart.js', { headers: { Accept: 'application/json' } })
+          .then((response) => response.json())
+          .then(renderCartOptions)
+          .catch((error) => console.warn('Custom cart options failed to load:', error));
+      }, 80);
+    }
+
+    document.addEventListener('DOMContentLoaded', initCartUI);
+    document.addEventListener('cart:updated', initCartUI);
+    document.addEventListener('cart:refresh', initCartUI);
+    document.addEventListener('shopify:section:load', initCartUI);
+
+    const observer = new MutationObserver(function () {
+      if (document.querySelector('#main-cart-items .cart-item, .cart-items .cart-item')) initCartUI();
+    });
+
+    if (document.body) {
+      observer.observe(document.body, { childList: true, subtree: true });
+    }
+  })();
+</script>
+
+<style>
+  .cart-item__details > dl:not(.custom-cart-options),
+  .cart__item-details > dl:not(.custom-cart-options),
+  .cart-item-details > dl:not(.custom-cart-options) {
+    display: none !important;
+  }
+
+  .custom-cart-options {
+    margin-top: 8px;
+    color: #555;
+    color: rgba(var(--color-foreground, 18, 18, 18), 0.75);
+    font-size: 14px;
+    line-height: 1.45;
+  }
+
+  .custom-cart-options__row {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 6px;
+    margin-right: 10px;
+    flex-wrap: wrap;
+  }
+
+  .custom-cart-options__row.files-ui {
+    display: block;
+    margin-right: 0;
+  }
+
+  .custom-cart-options__label {
+    color: #444;
+    color: rgba(var(--color-foreground, 18, 18, 18), 0.82);
+  }
+
+  .custom-cart-options__value {
+    margin-top: 0;
+    word-break: break-word;
+  }
+
+  .custom-cart-options__row.files-ui .custom-cart-options__value {
+    margin-top: 4px;
+  }
+
+  .custom-cart-files {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .custom-cart-file-thumb {
+    display: inline-flex;
+    width: 36px;
+    height: 36px;
+    border: 1px solid #ddd;
+    border-color: rgba(var(--color-foreground, 18, 18, 18), 0.16);
+    background: #fff;
+    background: rgb(var(--color-background, 255, 255, 255));
+    overflow: hidden;
+    text-decoration: none;
+  }
+
+  .custom-cart-file-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .custom-cart-file-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 220px;
+    color: #444;
+    color: rgba(var(--color-foreground, 18, 18, 18), 0.82);
+    text-decoration: none;
+  }
+
+  .custom-cart-file-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border: 1px solid #ddd;
+    border-color: rgba(var(--color-foreground, 18, 18, 18), 0.16);
+    background: #f6f6f6;
+    background: rgba(var(--color-foreground, 18, 18, 18), 0.04);
+    font-size: 10px;
+    text-transform: uppercase;
+    flex: 0 0 auto;
+  }
+
+  .custom-cart-file-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+</style>
+
+{% schema %}
+{
+  "name": "Custom Cart UI",
+  "target": "section",
+  "settings": []
+}
+{% endschema %}

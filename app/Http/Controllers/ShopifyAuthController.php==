@@ -1,0 +1,66 @@
+<?php
+namespace App\Http\Controllers;
+
+use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Http; 
+class ShopifyAuthController extends Controller
+{
+   public function validateAppInstallation(Request $request)
+   {
+	$shop = $request->query('shop');
+	$host = $request->query('host');
+	print_r($request->all());die();
+	   
+	if (!$shop) 
+	{
+	 return response()->json(['error' => 'Missing shop parameter'], 400);
+	}  
+	$data = DB::table('shops')
+	    ->select('isApp_Enable', 'shop','app_id')
+	    ->where('shop', $shop)
+    	    ->where('app_id', $shop)
+	    ->get()->first();
+	if(!empty($data)) 
+	{
+	  return redirect()->route('welcome',['shop'=>$shop,'host'=>$host]);
+	}
+
+	$apiKey = env('SHOPIFY_API_KEY');
+	$scopes = env('SHOPIFY_APP_SCOPES');
+	$redirectUri = env('SHOPIFY_REDIRECT_URI'); 
+	$response = ['message' => 'App Installed Successfully', 'shop' => $shop,'accesskey' => $apiKey,'scope' =>   $scopes,'redirectUri' => $redirectUri];
+        return view('authorize', compact('response')); 
+   }
+   
+   public function callbackAppInstallation(Request $request)
+   {
+        $shop = $request->query('shop');
+   	$code = $request->query('code');
+	if (!$shop || !$code) {
+           return response()->json(['error' => 'Missing parameters'], 400);
+    	}
+
+    	if($request->query('embedded'))
+   	 {
+	      $accessTokenUrl = "https://$shop/admin/oauth/access_token";
+	      $clientId = env('SHOPIFY_API_KEY');
+	      $clientSecret = env('SHOPIFY_API_SECRET');
+	      $response = Http::post($accessTokenUrl, [
+		'client_id' => $clientId,
+		'client_secret' => $clientSecret,
+		'code' => $code,
+	      ]);
+	      if ($response->failed()) {
+		  return response()->json(['error' => 'Failed to get access token'], 500);
+	      }
+	    
+	      $accessToken = $response->json()['access_token'];
+
+	      \App\Models\Shop::updateOrCreate(['shop' => $shop],['access_token' => $accessToken]);
+    	}
+    	$response = ['message' => 'App Installed Successfully', 'shop' => $shop];
+    	return view('getstarted', compact('response'));
+   }
+}

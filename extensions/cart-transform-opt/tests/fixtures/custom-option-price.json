@@ -1,0 +1,64 @@
+{
+  "payload": {
+    "export": "cart-transform-run",
+    "target": "cart.transform.run",
+    "input": {
+      "cart": {
+        "lines": [
+          {
+            "id": "gid://shopify/CartLine/1",
+            "quantity": 1,
+            "cost": {
+              "amountPerQuantity": {
+                "amount": "749.95",
+                "currencyCode": "USD"
+              }
+            },
+            "merchandise": {
+              "id": "gid://shopify/ProductVariant/74995000000001"
+            },
+            "customOptionData": {
+              "value": "{\"addon_variant_id\":\"gid://shopify/ProductVariant/67549511549232\",\"options\":[{\"id\":\"opt_10_val_0\",\"name\":\"select the item\",\"value\":\"taddy\",\"price\":20}]}"
+            },
+            "customOptionPrice": {
+              "value": "20"
+            }
+          }
+        ]
+      }
+    },
+    "output": {
+      "operations": [
+        {
+          "lineExpand": {
+            "cartLineId": "gid://shopify/CartLine/1",
+            "expandedCartItems": [
+              {
+                "merchandiseId": "gid://shopify/ProductVariant/74995000000001",
+                "quantity": 1,
+                "price": {
+                  "adjustment": {
+                    "fixedPricePerUnit": {
+                      "amount": 749.95
+                    }
+                  }
+                }
+              },
+              {
+                "merchandiseId": "gid://shopify/ProductVariant/67549511549232",
+                "quantity": 1,
+                "price": {
+                  "adjustment": {
+                    "fixedPricePerUnit": {
+                      "amount": 20
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

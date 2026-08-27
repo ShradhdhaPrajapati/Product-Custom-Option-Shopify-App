@@ -1,0 +1,25 @@
+query CartTransformRunInput {
+  cart {
+    lines {
+      id
+      quantity
+      cost {
+        amountPerQuantity {
+          amount
+          currencyCode
+        }
+      }
+      merchandise {
+        ... on ProductVariant {
+          id
+        }
+      }
+      customOptionData: attribute(key: "_custom_option_data") {
+        value
+      }
+      customOptionPrice: attribute(key: "_custom_option_price") {
+        value
+      }
+    }
+  }
+}

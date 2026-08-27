@@ -1,0 +1,30 @@
+{
+  "payload": {
+    "export": "cart-transform-run",
+    "target": "cart.transform.run",
+    "input": {
+      "cart": {
+        "lines": [
+          {
+            "id": "gid://shopify/CartLine/1",
+            "quantity": 1,
+            "cost": {
+              "amountPerQuantity": {
+                "amount": "500.00",
+                "currencyCode": "INR"
+              }
+            },
+            "merchandise": {
+              "id": "gid://shopify/ProductVariant/70000000000001"
+            },
+            "customOptionData": null,
+            "customOptionPrice": null
+          }
+        ]
+      }
+    },
+    "output": {
+      "operations": []
+    }
+  }
+}

@@ -1,0 +1,32 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "8672ef98ab71361f057a35ab4f33ce97"
+name = "Product Custom Option"
+application_url = "https://unbrief-denny-plashingly.ngrok-free.dev/appinstall/productcustomoption"
+embedded = true
+handle = "product-custom-option-apps"
+
+[build]
+dev_store_url = "product-custom-option-test.myshopify.com"
+
+[webhooks]
+api_version = "2025-10"
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "read_files,write_files,read_metaobjects,write_metaobjects,read_products,write_products,read_cart_transforms,write_cart_transforms"
+optional_scopes = [ ]
+use_legacy_install_flow = false
+
+[auth]
+redirect_urls = [
+  "https://unbrief-denny-plashingly.ngrok-free.dev/auth/callback"
+]
+
+[app_proxy]
+url = "https://unbrief-denny-plashingly.ngrok-free.dev/api/proxy"
+subpath = "test-app"
+prefix = "apps"
+
+[pos]
+embedded = false

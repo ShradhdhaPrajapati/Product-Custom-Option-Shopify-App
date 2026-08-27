@@ -1,0 +1,64 @@
+{
+  "payload": {
+    "export": "cart-transform-run",
+    "target": "cart.transform.run",
+    "input": {
+      "cart": {
+        "lines": [
+          {
+            "id": "gid://shopify/CartLine/2",
+            "quantity": 1,
+            "cost": {
+              "amountPerQuantity": {
+                "amount": "600.00",
+                "currencyCode": "USD"
+              }
+            },
+            "merchandise": {
+              "id": "gid://shopify/ProductVariant/60000000000001"
+            },
+            "customOptionData": {
+              "value": "{\"addon_variant_id\":\"gid://shopify/ProductVariant/67549511549232\",\"options\":[{\"id\":\"opt_1_val_0\",\"name\":\"Option A\",\"value\":\"Val A\",\"price\":10},{\"id\":\"opt_2_val_0\",\"name\":\"Option B\",\"value\":\"Val B\",\"price\":20},{\"id\":\"opt_3_val_0\",\"name\":\"Option C\",\"value\":\"Val C\",\"price\":5}]}"
+            },
+            "customOptionPrice": {
+              "value": "35"
+            }
+          }
+        ]
+      }
+    },
+    "output": {
+      "operations": [
+        {
+          "lineExpand": {
+            "cartLineId": "gid://shopify/CartLine/2",
+            "expandedCartItems": [
+              {
+                "merchandiseId": "gid://shopify/ProductVariant/60000000000001",
+                "quantity": 1,
+                "price": {
+                  "adjustment": {
+                    "fixedPricePerUnit": {
+                      "amount": 600
+                    }
+                  }
+                }
+              },
+              {
+                "merchandiseId": "gid://shopify/ProductVariant/67549511549232",
+                "quantity": 1,
+                "price": {
+                  "adjustment": {
+                    "fixedPricePerUnit": {
+                      "amount": 35
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

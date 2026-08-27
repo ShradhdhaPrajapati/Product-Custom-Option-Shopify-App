@@ -1,0 +1,34 @@
+{
+  "payload": {
+    "export": "cart-transform-run",
+    "target": "cart.transform.run",
+    "input": {
+      "cart": {
+        "lines": [
+          {
+            "id": "gid://shopify/CartLine/3",
+            "quantity": 1,
+            "cost": {
+              "amountPerQuantity": {
+                "amount": "100.00",
+                "currencyCode": "USD"
+              }
+            },
+            "merchandise": {
+              "id": "gid://shopify/ProductVariant/10000000000001"
+            },
+            "customOptionData": {
+              "value": "invalid-json-content{"
+            },
+            "customOptionPrice": {
+              "value": "-50"
+            }
+          }
+        ]
+      }
+    },
+    "output": {
+      "operations": []
+    }
+  }
+}

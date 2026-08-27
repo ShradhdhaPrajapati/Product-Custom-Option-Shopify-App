@@ -1,0 +1,252 @@
+<html lang="en">
+<head>
+    <meta name="shopify-api-key" content="{{ env('SHOPIFY_API_KEY') }}" />
+    <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
+    <link rel="stylesheet" href="{{ asset('build/assets/app--5bVDNiR.css') }}"/>
+</head>
+
+
+  <!--<style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: "Arial", sans-serif;
+        }
+        body {
+            background-color: #f8f8f8;
+            height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            background: #ffffff;
+            padding: 25px;
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+            max-width: 500px;
+            width: 100%;
+            line-height: 1.5;
+            margin-bottom: 10px;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        p {
+            color: #555;
+            font-size: 16px;
+            margin-bottom: 15px;
+        }
+        .btn {
+            display: inline-block;
+            margin-top: 15px;
+            padding: 10px 20px;
+            background: #090a09;
+            color: white;
+            text-decoration: none;
+            font-weight: bold;
+            border-radius: 5px;
+            transition: 0.3s;
+        }
+        .btn:hover {
+            background: #005ecb;
+        }
+        ul {
+            margin-top: 10px;
+            padding-left: 20px;
+        }
+        ul li {
+            color: #333;
+            font-size: 14px;
+            margin-bottom: 5px;
+        }
+        .toggle-container {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f4f4f4;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .toggle-container .status.active
+        { 
+	  color : #008010;
+        }
+        .toggle-container .status.in-activate
+        {
+          color : #6c8000;
+        }
+        .toggle-label {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 16px;
+            color: #333;
+            font-weight: bold;
+        }
+        .toggle-switch {
+            position: relative;
+            width: 50px;
+            height: 25px;
+        }
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .slider {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            border-radius: 25px;
+            transition: 0.3s;
+            cursor: pointer;
+        }
+        .slider:before {
+            content: "";
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            border-radius: 50%;
+            transition: 0.3s;
+        }
+        input:checked + .slider {
+            background-color: #007aff;
+        }
+        input:checked + .slider:before {
+            transform: translateX(25px);
+        }
+        #loader {
+	    display: none;
+	    border: 3px solid #f3f3f3;
+	    border-top: 3px solid #3498db;
+	    border-radius: 50%;
+	    width: 25px;
+	    height: 25px;
+	    animation: spin 1s linear infinite;
+	}
+
+	@keyframes spin {
+	    0% { transform: rotate(0deg); }
+	    100% { transform: rotate(360deg); }
+	}
+    </style>-->
+    <script src="{{ asset('js/app-bridge.js') }}"></script>
+    <script src="{{ asset('js/app-bridge-utils.js') }}"></script>
+
+    <div id="root"></div>
+    <script type="module" src="{{ asset('build/assets/app-CqflisoM.js') }}"></script>
+    <!--<script>
+    var app=null;
+    (async function () {
+        const params = new URLSearchParams(window.location.search);
+        const shop = params.get("shop");
+
+        if (!shop) {
+            console.error("Missing shop or host parameters.");
+            return;
+        }
+    })();
+        const params = new URLSearchParams(window.location.search);
+        const shop = params.get("shop");
+          // Initialize App Bridge
+        var AppBridge = window['app-bridge'];
+
+	const config = {
+	    apiKey: "{{ env('SHOPIFY_API_KEY') }}",
+	    host: new URLSearchParams(location.search).get("host"),
+	    forceRedirect: true,
+	    shopOrigin: shop
+	};
+       /* app = AppBridge.createApp(config);
+        const Redirect = AppBridge.actions.Redirect;
+        Redirect.create(app).dispatch(Redirect.Action.APP, "/dev/public/welcome");  */
+        
+	document.getElementById("toggleApp").addEventListener("change", async function () 
+	{
+          var isChecked = $(this).is(":checked") ? 1 : 0;
+	  var url = "<?php echo env('SHOPIFY_APP_URL');?>/api/appStatus";
+	  $("#loader").show();
+	  fetch(url, {
+		method: 'POST',
+		headers: {
+		    'Content-Type': 'application/json'
+		},
+		body: JSON.stringify( {
+		    shop:"{{$data->shop}}",
+		    status: isChecked
+		  })
+	    })
+	    .then(response => response.json())
+	    .then(function(data){
+                 $("#loader").hide();
+	   	 $('.toggle-container .status').text(data.message);
+		    if(data.status==1)
+		    {
+       		       $('.toggle-container .status').addClass('active');
+      		       $('.toggle-container .status').removeClass('in-activate');
+		    }
+		    else
+		    {
+		       $('.toggle-container .status').addClass('in-activate');
+      		       $('.toggle-container .status').removeClass('active');
+		    }
+            })
+	    .catch(function(error){
+       		    alert(error);
+	    });    
+  });
+    </script>
+   <!-- <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react?dev",
+    "react-dom/client": "https://esm.sh/react-dom/client?dev"
+  }
+}
+</script>
+<script type="text/babel" data-type="module">
+import React, { StrictMode } from 'react';
+import { createRoot } from 'react-dom/client';
+import {AppProvider,Page,Card,Text} from '/@shopify/polaris';
+
+function MyButton() {
+  return (
+    <button>
+      I'm a button
+    </button>
+  );
+}
+
+let App = function MyApp() {
+  return (
+     <AppProvider>
+        <Page title="Welcome to Shopify App">
+          <Card sectioned>
+            <Text variant="headingMd" as="h2">🎉 Hello from Polaris!</Text>
+            <Text>This is a Shopify embedded app using App Bridge.</Text>
+          </Card>
+        </Page>
+      </AppProvider>
+  );
+}
+
+
+
+const root = createRoot(document.getElementById('root'));
+root.render(
+  <StrictMode>
+    <App />
+  </StrictMode>
+);
+</script>
+  -->
+
+</html>
