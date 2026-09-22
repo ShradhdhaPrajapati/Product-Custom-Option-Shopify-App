@@ -129,7 +129,7 @@
       if (!Array.isArray(addonOptions) || !addonOptions.length) return null;
 
       const cleanKey = String(key || '').trim().toLowerCase();
-      const cleanVal = String(val || '').trim().toLowerCase();
+      const cleanVal = String(val || '').replace(/\s*\(\+[^)]+\)\s*$/, '').trim().toLowerCase();
 
       // 1. Strict name & value match
       let match = addonOptions.find((opt) => {
@@ -187,10 +187,13 @@
           value.appendChild(filePreview);
         } else {
           const formattedValues = values.map((val) => {
+            if (/\(\+[^)]+\)/.test(val)) {
+              return val;
+            }
             const match = findMatchingOption(addonOptions, key, val);
             const priceNum = match ? parseFloat(match.price) : NaN;
             if (!isNaN(priceNum) && priceNum > 0) {
-              return `${val} (+$${priceNum.toFixed(2)})`;
+              return `${val} (+${match.price || priceNum})`;
             }
             return val;
           });

@@ -132,12 +132,13 @@ export function cartTransformRun(
             merchandiseId: addonVariantId,
             quantity: 1,
             price: {
-              adjustment: {
+                adjustment: {
                 fixedPricePerUnit: {
-                  amount: totalOptionPrice,
+                    amount: totalOptionPrice,
                 },
-              },
+                },
             },
+            attributes: [], 
           },
         ],
       },

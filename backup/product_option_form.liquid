@@ -1,0 +1,1645 @@
+{% if template.name == 'product' and shop.metafields.productcustomoption.enabled == 1 %}
+
+  <meta name="csrf-token" content="{{ shop.domain }}">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+  <script>
+    document.addEventListener('DOMContentLoaded', function () {
+      var rawProductId = '{{ product.id }}';
+      var shopDomain = '{{ shop.permanent_domain }}';
+
+      const csrfToken = document.querySelector('meta[name="csrf-token"]').content;
+
+      const form = document.querySelector('form[action*="/cart/add"]');
+      if (!form) return;
+      if (!form.id) form.id = 'product-custom-option-form-' + rawProductId;
+      form.setAttribute('enctype', 'multipart/form-data');
+
+      if (document.querySelector('.custom-options-container')) return;
+
+      var container = document.createElement('div');
+      container.className = 'custom-options-container';
+      container.style.marginBottom = '20px';
+
+      let submitBtn = form.querySelector('[type="submit"]');
+      if (submitBtn && submitBtn.parentNode === form) {
+        form.insertBefore(container, submitBtn);
+      } else {
+        form.prepend(container);
+      }
+
+      var shopCurrency = {{ cart.currency.symbol | default: '$' | json }};
+      var moneyFormat = {{ shop.money_format | json }} || ('$' + '{' + '{amount}' + '}');
+      var optionPriceLookup = {};
+      var priceSummaryEl = null;
+      var helperVariantId = '';
+
+      function formatOptionPrice(amount) {
+        var cents = Math.round(parseFloat(amount || 0) * 100);
+        if (window.Shopify && typeof window.Shopify.formatMoney === 'function') {
+          try {
+            return window.Shopify.formatMoney(cents, moneyFormat);
+          } catch (e) {}
+        }
+        var val = (cents / 100).toFixed(2);
+        var fmt = moneyFormat || ('$' + '{' + '{' + 'amount' + '}' + '}');
+        var patAmount = '{' + '{' + 'amount' + '}' + '}';
+        var patAmountSp = '{' + '{' + ' amount ' + '}' + '}';
+        var patNoDec = '{' + '{' + 'amount_no_decimals' + '}' + '}';
+        var patComma = '{' + '{' + 'amount_with_comma_separator' + '}' + '}';
+
+        if (fmt.indexOf(patAmount) !== -1 || fmt.indexOf(patAmountSp) !== -1) {
+          return fmt.replace(patAmount, val).replace(patAmountSp, val);
+        }
+        if (fmt.indexOf(patNoDec) !== -1) {
+          return fmt.replace(patNoDec, Math.round(cents / 100));
+        }
+        if (fmt.indexOf(patComma) !== -1) {
+          return fmt.replace(patComma, val.replace('.', ','));
+        }
+        return shopCurrency + val;
+      }
+
+      function getSelectedAddonOptionData() {
+        const controls = getPropertyControls().filter(optionHasValue);
+        const addonItems = [];
+
+        controls.forEach((field) => {
+          if (field.name === 'properties[_custom_option_price]' || field.name === 'properties[_custom_option_data]') return;
+
+          let price = 0;
+          let optName = field.dataset.optionName || field.name.replace(/^properties\[/, '').replace(/\]\[\]$/, '').replace(/\]$/, '');
+          let valText = '';
+          let valId = '';
+
+          if (field.type === 'checkbox' || field.type === 'radio') {
+            if (field.checked) {
+              if (field.dataset && field.dataset.price !== undefined && field.dataset.price !== '') {
+                price = parseFloat(field.dataset.price) || 0;
+              } else {
+                let labelKey = field.name.replace(/^properties\[/, '').replace(/\]\[\]$/, '').replace(/\]$/, '');
+                price = optionPriceLookup[labelKey + '::' + field.value] || optionPriceLookup[field.value] || 0;
+              }
+              valText = field.value;
+              valId = field.dataset.valueId || ('opt_' + (field.dataset.optionId || 'custom') + '_' + encodeURIComponent(field.value));
+            }
+          } else if (field.tagName.toLowerCase() === 'select') {
+            let selectedOpt = field.options[field.selectedIndex];
+            if (selectedOpt && selectedOpt.value) {
+              if (selectedOpt.dataset && selectedOpt.dataset.price !== undefined && selectedOpt.dataset.price !== '') {
+                price = parseFloat(selectedOpt.dataset.price) || 0;
+              } else {
+                let labelKey = field.name.replace(/^properties\[/, '').replace(/\]$/, '');
+                price = optionPriceLookup[labelKey + '::' + selectedOpt.value] || optionPriceLookup[selectedOpt.value] || 0;
+              }
+              valText = selectedOpt.value;
+              valId = selectedOpt.dataset.valueId || field.dataset.valueId || ('opt_' + (field.dataset.optionId || 'custom') + '_' + encodeURIComponent(selectedOpt.value));
+            }
+          } else {
+            if (field.value) {
+              if (field.dataset && field.dataset.price !== undefined && field.dataset.price !== '') {
+                price = parseFloat(field.dataset.price) || 0;
+              } else {
+                let labelKey = field.name.replace(/^properties\[/, '').replace(/\]\[\]$/, '').replace(/\]$/, '');
+                price = optionPriceLookup[labelKey + '::' + field.value] || optionPriceLookup[labelKey + '::file'] || optionPriceLookup[field.value] || 0;
+              }
+              valText = field.type === 'file' ? (field.files && field.files[0] ? field.files[0].name : 'File Upload') : field.value;
+              valId = field.dataset.valueId || ('opt_' + (field.dataset.optionId || 'custom') + '_val_0');
+            }
+          }
+
+          let cleanValText = valText.replace(/\s*\(\+[^)]+\)\s*$/, '');
+          if (!isNaN(price) && price > 0 && cleanValText) {
+            addonItems.push({
+              id: valId,
+              name: optName,
+              value: cleanValText,
+              price: price
+            });
+          }
+        });
+
+        return addonItems;
+      }
+
+      function calculateSelectedOptionPrice() {
+        let total = 0;
+        const controls = getPropertyControls().filter(optionHasValue);
+
+        controls.forEach((field) => {
+          if (field.name === 'properties[_custom_option_price]' || field.name === 'properties[_custom_option_data]') return;
+          let price = 0;
+          if (field.type === 'checkbox' || field.type === 'radio') {
+            if (field.checked) {
+              if (field.dataset && field.dataset.price !== undefined && field.dataset.price !== '') {
+                price = parseFloat(field.dataset.price) || 0;
+              } else {
+                let labelKey = field.name.replace(/^properties\[/, '').replace(/\]\[\]$/, '').replace(/\]$/, '');
+                price = optionPriceLookup[labelKey + '::' + field.value] || optionPriceLookup[field.value] || 0;
+              }
+            }
+          } else if (field.tagName.toLowerCase() === 'select') {
+            let selectedOpt = field.options[field.selectedIndex];
+            if (selectedOpt && selectedOpt.value) {
+              if (selectedOpt.dataset && selectedOpt.dataset.price !== undefined && selectedOpt.dataset.price !== '') {
+                price = parseFloat(selectedOpt.dataset.price) || 0;
+              } else {
+                let labelKey = field.name.replace(/^properties\[/, '').replace(/\]$/, '');
+                price = optionPriceLookup[labelKey + '::' + selectedOpt.value] || optionPriceLookup[selectedOpt.value] || 0;
+              }
+            }
+          } else {
+            if (field.value) {
+              if (field.dataset && field.dataset.price !== undefined && field.dataset.price !== '') {
+                price = parseFloat(field.dataset.price) || 0;
+              } else {
+                let labelKey = field.name.replace(/^properties\[/, '').replace(/\]\[\]$/, '').replace(/\]$/, '');
+                price = optionPriceLookup[labelKey + '::' + field.value] || optionPriceLookup[labelKey + '::file'] || optionPriceLookup[field.value] || 0;
+              }
+            }
+          }
+
+          if (!isNaN(price) && price > 0) {
+            total += price;
+          }
+        });
+
+        return total;
+      }
+
+      function updateHiddenPriceProperty(totalPrice) {
+        let input = container.querySelector('input.custom-option-price-input');
+        if (!input) {
+          input = document.createElement('input');
+          input.type = 'hidden';
+          input.name = 'properties[_custom_option_price]';
+          input.className = 'custom-option-price-input';
+          container.appendChild(input);
+        }
+        input.value = String(totalPrice);
+
+        let dataInput = container.querySelector('input.custom-option-data-input');
+        const addonItems = getSelectedAddonOptionData();
+
+        if (totalPrice > 0 && addonItems.length > 0 && helperVariantId) {
+          if (!dataInput) {
+            dataInput = document.createElement('input');
+            dataInput.type = 'hidden';
+            dataInput.name = 'properties[_custom_option_data]';
+            dataInput.className = 'custom-option-data-input';
+            container.appendChild(dataInput);
+          }
+          dataInput.value = JSON.stringify({
+            addon_variant_id: helperVariantId,
+            options: addonItems
+          });
+        } else {
+          if (dataInput) {
+            dataInput.remove();
+          }
+        }
+      }
+
+      function updateOptionPriceDisplay() {
+        const total = calculateSelectedOptionPrice();
+        if (priceSummaryEl) {
+          let priceLabelEl = priceSummaryEl.querySelector('.custom-options-price-val');
+          if (priceLabelEl) {
+            priceLabelEl.textContent = formatOptionPrice(total);
+          } else {
+            priceSummaryEl.innerHTML = '<span>Additional Options:</span> <span class="custom-options-price-val">' + formatOptionPrice(total) + '</span>';
+          }
+        }
+        updateHiddenPriceProperty(total);
+      }
+
+      container.addEventListener('change', updateOptionPriceDisplay);
+      container.addEventListener('input', updateOptionPriceDisplay);
+
+      function getPropertyControls() {
+        return Array.from(
+          container.querySelectorAll('input[name^="properties["], select[name^="properties["], textarea[name^="properties["]')
+        );
+      }
+
+      function attachPropertiesToProductForm() {
+        getPropertyControls().forEach((field) => {
+          field.setAttribute('form', form.id);
+        });
+      }
+
+      function optionHasValue(field) {
+        if (field.disabled || !field.name) return false;
+        if ((field.type === 'checkbox' || field.type === 'radio') && !field.checked) return false;
+        return String(field.value || '').trim() !== '';
+      }
+
+      function getSelectedProperties() {
+        const controls = getPropertyControls().filter(optionHasValue);
+        const result = [];
+        const checkboxGroups = {};
+
+        controls.forEach((field) => {
+          if (field.type === 'checkbox') {
+            const baseName = field.name.replace(/\[\]$/, '');
+            if (!checkboxGroups[baseName]) {
+              checkboxGroups[baseName] = [];
+            }
+            checkboxGroups[baseName].push(field.value);
+          } else {
+            result.push([field.name, field.value]);
+          }
+        });
+
+        Object.keys(checkboxGroups).forEach((baseName) => {
+          const values = checkboxGroups[baseName];
+          if (values.length > 0) {
+            result.push([baseName, values.join(', ')]);
+          }
+        });
+
+        return result;
+      }
+
+      function syncPropertiesBeforeAddToCart() {
+        attachPropertiesToProductForm();
+        form.querySelectorAll('.custom-option-cart-mirror').forEach((field) => field.remove());
+
+        getSelectedProperties().forEach(([name, value]) => {
+          const mirror = document.createElement('input');
+          mirror.type = 'hidden';
+          mirror.className = 'custom-option-cart-mirror';
+          mirror.name = name;
+          mirror.value = value;
+          form.appendChild(mirror);
+        });
+
+        console.log('Custom option properties ready:', getSelectedProperties());
+      }
+
+      function isCartAddUrl(url) {
+        try {
+          const parsedUrl = new URL(url, window.location.origin);
+          return parsedUrl.pathname.indexOf('/cart/add') !== -1;
+        } catch (error) {
+          return String(url).indexOf('/cart/add') !== -1;
+        }
+      }
+
+      function addPropertiesToBody(body) {
+        const selectedProperties = getSelectedProperties();
+        if (!selectedProperties.length) return body;
+
+        if (body instanceof FormData || body instanceof URLSearchParams) {
+          selectedProperties.forEach(([name]) => {
+            body.delete(name);
+            body.delete(name + '[]');
+          });
+          selectedProperties.forEach(([name, value]) => body.append(name, value));
+          return body;
+        }
+
+        if (typeof body === 'string') {
+          try {
+            const parsed = JSON.parse(body);
+            if (parsed && typeof parsed === 'object') {
+              selectedProperties.forEach(([name, value]) => {
+                const key = name.replace(/^properties\[/, '').replace(/\]$/, '');
+                const arrayKey = key + '[]';
+                if (parsed.properties) {
+                  delete parsed.properties[arrayKey];
+                  parsed.properties[key] = value;
+                }
+                if (parsed.items && Array.isArray(parsed.items)) {
+                  parsed.items.forEach((item) => {
+                    if (item.properties) {
+                      delete item.properties[arrayKey];
+                      item.properties[key] = value;
+                    }
+                  });
+                }
+              });
+              return JSON.stringify(parsed);
+            }
+          } catch (e) {
+            const params = new URLSearchParams(body);
+            selectedProperties.forEach(([name]) => {
+              params.delete(name);
+              params.delete(name + '[]');
+            });
+            selectedProperties.forEach(([name, value]) => params.append(name, value));
+            return params.toString();
+          }
+        }
+
+        return body;
+      }
+
+      form.addEventListener('submit', syncPropertiesBeforeAddToCart, true);
+      form.addEventListener('formdata', function (event) {
+        getSelectedProperties().forEach(([name]) => {
+          event.formData.delete(name);
+          event.formData.delete(name + '[]');
+        });
+        getSelectedProperties().forEach(([name, value]) => event.formData.append(name, value));
+        console.log('Custom option formdata properties:', getSelectedProperties());
+      });
+
+      if (!window.__productCustomOptionFetchPatched) {
+        window.__productCustomOptionFetchPatched = true;
+        const originalFetch = window.fetch;
+
+        window.fetch = function (resource, options) {
+          const requestUrl = resource && resource.url ? resource.url : resource;
+          const requestOptions = options ? Object.assign({}, options) : {};
+
+          if (isCartAddUrl(requestUrl)) {
+            syncPropertiesBeforeAddToCart();
+
+            if (requestOptions.body) {
+              requestOptions.body = addPropertiesToBody(requestOptions.body);
+            } else if (!(resource instanceof Request)) {
+              requestOptions.method = requestOptions.method || 'POST';
+              requestOptions.body = addPropertiesToBody(new FormData(form));
+            }
+
+            console.log('Custom option patched /cart/add request:', getSelectedProperties());
+          }
+
+          return originalFetch.call(window, resource, requestOptions);
+        };
+      }
+
+      {% comment %} var apiUrl =
+        '/apps/test-app/get-options?product_id=' + rawProductId + '&shop=' + shopDomain + '&t=' + new Date().getTime(); {% endcomment %}
+
+        var apiUrl = `/apps/test-app/get-options?product_id=${rawProductId}&shop={{ shop.permanent_domain }}&t=${Date.now()}`;
+
+
+      fetch(apiUrl, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': 'true',
+          'X-Requested-With': 'XMLHttpRequest'
+        },
+      })
+        .then((response) => {
+          console.log('Response Status:', response.status);
+          console.log('Response OK:', response.ok);
+
+          if (!response.ok) {
+            throw new Error('Network response was not ok');
+          }
+
+          return response.json();
+        })
+        .then((result) => {
+          console.log('API Response:', result);
+
+          if (result && result.helper_variant_id) {
+            helperVariantId = result.helper_variant_id;
+          }
+
+          container.innerHTML = '';
+
+          let finalData = [];
+
+          if (result.success && Array.isArray(result.data)) {
+            finalData = result.data;
+          } else if (Array.isArray(result)) {
+            finalData = result;
+          }
+
+          console.log('Final Data:', finalData);
+
+          if (finalData.length > 0) {
+            renderOptions(finalData);
+            attachPropertiesToProductForm();
+          } else {
+            console.warn('No options found');
+            container.remove();
+          }
+        })
+        .catch((error) => {
+          console.error('Fetch Error:', error);
+          console.error('API URL:', apiUrl);
+
+          container.remove();
+        });
+
+        function renderOptions(mergedOptions) {
+            optionPriceLookup = {};
+            mergedOptions.forEach((opt) => {
+              let values = getOptionValues(opt.values);
+              if (Array.isArray(values)) {
+                values.forEach((v) => {
+                  if (typeof v === 'object' && v !== null) {
+                    if (v.name) {
+                      let key = opt.label + '::' + v.name;
+                      optionPriceLookup[key] = parseFloat(v.price) || 0;
+                      if (optionPriceLookup[v.name] === undefined) {
+                        optionPriceLookup[v.name] = parseFloat(v.price) || 0;
+                      }
+                    }
+                  }
+                });
+              }
+              if (opt.type === 'file') {
+                try {
+                  let rawParsed = JSON.parse(opt.values);
+                  if (Array.isArray(rawParsed) && rawParsed.length > 0 && rawParsed[0].price) {
+                    optionPriceLookup[opt.label + '::file'] = parseFloat(rawParsed[0].price) || 0;
+                  }
+                } catch (e) {}
+              }
+            });
+
+            mergedOptions.forEach((opt, index) => {
+            let wrap = document.createElement('div');
+            wrap.style.marginBottom = '14px';
+
+            if (!['paragraph', 'header', 'divider'].includes(opt.type)) {
+                let label = document.createElement('label');
+                label.innerText = opt.label;
+                label.style.fontWeight = '600';
+                label.style.display = 'block';
+                label.style.marginBottom = '5px';
+
+                if (Number(opt.required) === 1) {
+                label.innerHTML += ' <span style="color:red">*</span>';
+                }
+                wrap.appendChild(label);
+            }
+
+            let input = createInputField(opt, index);
+            if (input) wrap.appendChild(input);
+
+            container.appendChild(wrap);
+            });
+
+            if (!priceSummaryEl) {
+              priceSummaryEl = document.createElement('div');
+              priceSummaryEl.className = 'custom-options-price-summary';
+              priceSummaryEl.style.marginTop = '16px';
+              priceSummaryEl.style.paddingTop = '12px';
+              priceSummaryEl.style.borderTop = '1px dashed #d1d5db';
+              priceSummaryEl.style.fontWeight = '600';
+              priceSummaryEl.style.fontSize = '15px';
+              priceSummaryEl.style.color = '#111827';
+              priceSummaryEl.style.display = 'flex';
+              priceSummaryEl.style.justifyContent = 'space-between';
+              priceSummaryEl.style.alignItems = 'center';
+            }
+            container.appendChild(priceSummaryEl);
+            updateOptionPriceDisplay();
+        }
+
+        function getOptionValues(valueString) {
+            if (!valueString) return [];
+            if (typeof valueString === 'object') return valueString;
+            try {
+            let parsed = JSON.parse(valueString);
+            if (Array.isArray(parsed)) {
+                return parsed.map((item) => {
+                if (typeof item === 'object' && item !== null) {
+                  return {
+                      name: item.name !== undefined ? item.name : item,
+                      price: item.price !== undefined ? item.price : '',
+                      image: item.image !== undefined ? item.image : '',
+                      color: item.color !== undefined ? item.color : '',
+                  };
+                }
+                return { name: String(item), price: '', image: '', color: '' };
+                });
+            }
+            return [];
+            } catch (e) {
+            return valueString.split(',').map((s) => ({ name: s.trim(), price: '' }));
+            }
+        }
+
+        function clearError(container) {
+            let errorSpan = container.querySelector('.file-error-msg');
+            if (errorSpan) errorSpan.textContent = '';
+        }
+
+        function createInputField(opt, index) {
+            let input;
+            let values = getOptionValues(opt.values);
+            let optDbId = opt.id ? String(opt.id) : ('opt_' + index);
+
+            switch (opt.type) {
+            case 'text':
+                input = document.createElement('input');
+                input.type = 'text';
+            break;
+
+            case 'textarea':
+                input = document.createElement('textarea');
+            break;
+
+            case 'email':
+                input = document.createElement('input');
+                input.type = 'email';
+            break;
+
+            case 'number':
+                input = document.createElement('input');
+                input.type = 'number';
+            break;
+
+            case 'select':
+                input = document.createElement('select');
+                input.dataset.optionId = optDbId;
+                input.dataset.optionName = opt.label;
+                input.appendChild(new Option('-- Select --', ''));
+                if (values.length > 0) {
+                values.forEach((v, i) => {
+                    let pNum = parseFloat(v.price);
+                    let priceLabel = (pNum && pNum > 0) ? ` (+${v.price})` : '';
+                    let optEl = new Option(v.name + priceLabel, v.name + priceLabel);
+                    optEl.dataset.price = v.price || 0;
+                    optEl.dataset.optionId = optDbId;
+                    optEl.dataset.optionName = opt.label;
+                    optEl.dataset.valueId = (v && v.id) ? String(v.id) : (optDbId + '_val_' + i);
+                    input.appendChild(optEl);
+                });
+                }
+            break;
+
+            case 'checkbox':
+                let checkWrap = document.createElement('div');
+                if (values.length > 0) {
+                values.forEach((v, i) => {
+                    let id = `checkbox_${index}_${i}`;
+                    let pNum = parseFloat(v.price);
+                    let priceLabel = (pNum && pNum > 0) ? ` (+${v.price})` : '';
+                    let valId = (v && v.id) ? String(v.id) : (optDbId + '_val_' + i);
+                    checkWrap.innerHTML += `
+                <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+                    <input type="checkbox" id="${id}" name="properties[${opt.label}][]" value="${v.name}${priceLabel}" data-price="${v.price || 0}" data-option-id="${optDbId}" data-option-name="${opt.label}" data-value-id="${valId}">
+                    <label for="${id}" style="margin:0; cursor:pointer;">${v.name}${priceLabel}</label>
+                </div>`;
+                });
+            return checkWrap;
+                } else {
+                input = document.createElement('input');
+                input.type = 'checkbox';
+                input.value = 'Yes';
+                input.name = `properties[${opt.label}]`;
+                input.dataset.price = opt.price || 0;
+                input.dataset.optionId = optDbId;
+                input.dataset.optionName = opt.label;
+                input.dataset.valueId = optDbId + '_val_0';
+                }
+            break;
+
+            case 'radio':
+                let radioWrap = document.createElement('div');
+                if (values.length > 0) {
+                values.forEach((v, i) => {
+                    let id = `radio_${index}_${i}`;
+                    let pNum = parseFloat(v.price);
+                    let priceLabel = (pNum && pNum > 0) ? ` (+${v.price})` : '';
+                    let valId = (v && v.id) ? String(v.id) : (optDbId + '_val_' + i);
+                    radioWrap.innerHTML += `
+                <div style="display:flex; align-items:center; gap:5px; margin-bottom:5px;">
+                    <input type="radio" id="${id}" name="properties[${opt.label}]" value="${v.name}${priceLabel}" data-price="${v.price || 0}" data-option-id="${optDbId}" data-option-name="${opt.label}" data-value-id="${valId}">
+                    <label for="${id}" style="margin:0; cursor:pointer;">${v.name}${priceLabel}</label>
+                </div>`;
+                });
+                }
+            return radioWrap;
+
+            case 'switch':
+                let switchWrap = document.createElement('div');
+                switchWrap.className = 'custom-toggle-wrapper';
+
+                let hiddenSwitchInput = document.createElement('input');
+                hiddenSwitchInput.type = 'hidden';
+                hiddenSwitchInput.name = `properties[${opt.label}]`;
+
+                let switchValues = values;
+                if (!switchValues || switchValues.length === 0) {
+                switchValues = [{ name: 'Yes' }, { name: 'No' }];
+                }
+                let valOn = switchValues[0];
+                let valOff = switchValues[1] || { name: 'No' };
+
+                hiddenSwitchInput.value = valOff.name;
+                hiddenSwitchInput.dataset.price = valOff.price || 0;
+                if (Number(opt.required) === 1) hiddenSwitchInput.required = true;
+
+                let labelToggle = document.createElement('label');
+                labelToggle.className = 'custom-toggle-switch';
+
+                let inputToggle = document.createElement('input');
+                inputToggle.type = 'checkbox';
+
+                let spanSlider = document.createElement('span');
+                spanSlider.className = 'custom-toggle-slider';
+
+                labelToggle.appendChild(inputToggle);
+                labelToggle.appendChild(spanSlider);
+
+                let textLabel = document.createElement('span');
+                textLabel.className = 'custom-toggle-text';
+
+                function updateSwitchState() {
+                let activeVal = inputToggle.checked ? valOn : valOff;
+                let pNum = parseFloat(activeVal.price);
+                let priceLabel = (pNum && pNum > 0) ? ` (+${activeVal.price})` : '';
+                textLabel.textContent = activeVal.name + priceLabel;
+                hiddenSwitchInput.value = activeVal.name + priceLabel;
+                hiddenSwitchInput.dataset.price = activeVal.price || 0;
+                updateOptionPriceDisplay();
+                }
+                updateSwitchState();
+                inputToggle.addEventListener('change', updateSwitchState);
+
+                switchWrap.appendChild(hiddenSwitchInput);
+                switchWrap.appendChild(labelToggle);
+                switchWrap.appendChild(textLabel);
+            return switchWrap;
+
+            case 'swatch':
+                let swatchWrap = document.createElement('div');
+                swatchWrap.className = 'custom-swatch-container';
+                let hiddenSwatchInput = document.createElement('input');
+                hiddenSwatchInput.type = 'hidden';
+                hiddenSwatchInput.name = `properties[${opt.label}]`;
+                if (Number(opt.required) === 1) hiddenSwatchInput.required = true;
+                swatchWrap.appendChild(hiddenSwatchInput);
+
+                if (values.length > 0) {
+                    values.forEach((v) => {
+                        let itemDiv = document.createElement('div');
+                        itemDiv.className = 'custom-swatch-item';
+                        if (v.image && v.image.length > 10) {
+                        itemDiv.style.backgroundImage = `url('${v.image}')`;
+                        itemDiv.style.backgroundColor = 'transparent';
+                        } else {
+                        let bgColor = v.color ? v.color : '#ddd';
+                        itemDiv.style.backgroundColor = bgColor;
+                        itemDiv.style.backgroundImage = 'none';
+                        }
+                        let pNum = parseFloat(v.price);
+                        let priceLabel = (pNum && pNum > 0) ? ` (+${v.price})` : '';
+                        itemDiv.title = v.name + priceLabel;
+                        itemDiv.addEventListener('click', function () {
+                        swatchWrap.querySelectorAll('.custom-swatch-item').forEach((el) => el.classList.remove('active'));
+                        this.classList.add('active');
+                        hiddenSwatchInput.value = v.name + priceLabel;
+                        hiddenSwatchInput.dataset.price = v.price || 0;
+                        updateOptionPriceDisplay();
+                        });
+                        swatchWrap.appendChild(itemDiv);
+                    });
+                }
+            return swatchWrap;
+
+            case 'dropdown_thumbnail':
+                let dropdownWrap = document.createElement('div');
+                dropdownWrap.className = 'custom-dropdown-container';
+
+                let hiddenInput = document.createElement('input');
+                hiddenInput.type = 'hidden';
+                hiddenInput.name = `properties[${opt.label}]`;
+                if (Number(opt.required) === 1) hiddenInput.required = true;
+                dropdownWrap.appendChild(hiddenInput);
+
+                let selectedDiv = document.createElement('div');
+                selectedDiv.className = 'custom-dropdown-selected';
+                selectedDiv.innerHTML = `<span>Select...</span> <span class="arrow">▼</span>`;
+                dropdownWrap.appendChild(selectedDiv);
+
+                let optionsList = document.createElement('div');
+                optionsList.className = 'custom-dropdown-options';
+
+                if (values.length > 0) {
+                values.forEach((v) => {
+                    let itemDiv = document.createElement('div');
+                    itemDiv.className = 'custom-option-item';
+
+                    let imgHTML = '';
+                    if (v.image && v.image.length > 10) {
+                    imgHTML = `<img src="${v.image}" class="option-thumb">`;
+                    } else {
+                    imgHTML = `<span class="option-thumb-placeholder">📷</span>`;
+                    }
+                    let pNum = parseFloat(v.price);
+                    let priceLabel = (pNum && pNum > 0) ? ` (+${v.price})` : '';
+
+                    itemDiv.innerHTML = `${imgHTML} <span class="option-text">${v.name}${priceLabel}</span>`;
+                    itemDiv.addEventListener('click', function (e) {
+                    e.stopPropagation();
+
+                    selectedDiv.innerHTML = `${imgHTML} <span class="option-text">${v.name}</span> <span class="arrow">▼</span>`;
+                    selectedDiv.style.borderColor = '#d1d5db';
+                    hiddenInput.value = v.name + priceLabel;
+                    hiddenInput.dataset.price = v.price || 0;
+                    optionsList.classList.remove('open');
+                    updateOptionPriceDisplay();
+                    });
+
+                    optionsList.appendChild(itemDiv);
+                });
+                }
+                dropdownWrap.appendChild(optionsList);
+
+                selectedDiv.addEventListener('click', function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                document.querySelectorAll('.custom-dropdown-options').forEach((el) => {
+                    if (el !== optionsList) el.classList.remove('open');
+                });
+                optionsList.classList.toggle('open');
+                });
+
+                document.addEventListener('click', function () {
+                optionsList.classList.remove('open');
+                });
+
+            return dropdownWrap;
+
+            case 'file':
+                let fileSettings = {};
+                try {
+                let rawParsed = JSON.parse(opt.values);
+                if (Array.isArray(rawParsed) && rawParsed.length > 0) {
+                    fileSettings = rawParsed[0];
+                }
+                } catch (e) {}
+
+                let acceptedTypes = '';
+
+                if (fileSettings.restriction === 'image') acceptedTypes = 'image/*';
+                else if (fileSettings.restriction === 'document') acceptedTypes = '.pdf,.doc,.docx,.xls,.txt';
+                else if (fileSettings.restriction === 'custom') acceptedTypes = fileSettings.custom_ext;
+
+                let maxQty = parseInt(fileSettings.max_qty) || 1;
+                let maxSizeBytes = 500 * 1024 * 1024; // 500 MB
+                let uploadedFiles = [];
+
+                let wrapper = document.createElement('div');
+                wrapper.className = 'custom-file-wrapper';
+
+                let fileInput = document.createElement('input');
+                fileInput.type = 'file';
+                fileInput.name = '';
+                fileInput.style.display = 'none';
+                if (acceptedTypes) fileInput.accept = acceptedTypes;
+                if (Number(opt.required) === 1) fileInput.setAttribute('aria-required', 'true');
+                if (maxQty > 1) {
+                    fileInput.multiple = true;
+                    fileInput.setAttribute('multiple', 'multiple');
+                }
+
+                let qtyText = maxQty > 1 ? `<span>Click to upload (Max ${maxQty} files)</span>` : `<span>Click to upload</span>`;
+
+                let uploadBox = document.createElement('div');
+                uploadBox.className = 'file-upload-box';
+                uploadBox.style.position = 'relative';
+                uploadBox.innerHTML = `
+                    <div class="upload-inner-content">
+                        <span class="upload-btn-text">Choose file</span>
+                        ${qtyText}
+                        <span class="upload-hint">or drop file to upload</span>
+                    </div>
+                    <div class="loader-container" style="display:none !important; position:absolute; top:0; left:0; width:100%; height:100%; background:rgba(255,255,255,0.9); justify-content:center; align-items:center; flex-direction:column; z-index:100;">
+                        <div class="loader"></div>
+                        <span style="font-size:12px; margin-top:5px; color:#333;">Uploading...</span>
+                    </div>
+                    <div class="success-container" style="display:none !important; position:absolute; top:0; left:0; width:100%; height:100%; background:rgba(255,255,255,0.9); justify-content:center; align-items:center; color:green; font-weight:bold; z-index:100;">
+                        Upload Successful!
+                    </div>
+                `;
+
+                let fileListContainer = document.createElement('div');
+
+                let previewBox = document.createElement('div');
+                previewBox.className = 'file-preview-box';
+                previewBox.style.display = 'none';
+                previewBox.innerHTML = `
+                    <div class="preview-content-left">
+                        <img src="" class="preview-thumb-img">
+                        <div class="preview-file-icon">📄</div>
+                        <span class="preview-filename">filename.jpg</span>
+                    </div>
+                    <div class="preview-action-right">
+                        <span class="remove-file-btn" title="Remove file">✖</span>
+                    </div>
+                `;
+
+                uploadBox.addEventListener('click', () => fileInput.click());
+
+                function getErrorSpan() {
+                    let errorSpan = wrapper.querySelector('.file-error-msg');
+                    if (errorSpan) return errorSpan;
+
+                    return (function(){
+                        let span = document.createElement('span');
+                        span.className = 'file-error-msg';
+                        span.style.color = 'red';
+                        span.style.fontWeight = '700';
+                        span.style.fontSize = '12px';
+                        span.style.display = 'block';
+                        previewBox.parentNode.insertBefore(span, previewBox.nextSibling);
+                        return span;
+                    })();
+                }
+
+                function setOverlay(el, display) {
+                    if (el) el.style.setProperty('display', display, 'important');
+                }
+
+                function removeUploadedEntry(entry) {
+                    if (entry.hiddenInput) entry.hiddenInput.remove();
+                    if (entry.objectUrl) URL.revokeObjectURL(entry.objectUrl);
+                    uploadedFiles = uploadedFiles.filter((item) => item !== entry);
+                    updateOptionPriceDisplay();
+                }
+
+                function validateSelectedFiles(newFiles, errorSpan) {
+                    if (uploadedFiles.length + newFiles.length > maxQty) {
+                        errorSpan.textContent = 'You can upload maximum ' + maxQty + ' file' + (maxQty > 1 ? 's.' : '.');
+                        return false;
+                    }
+
+                    for (let file of newFiles) {
+                        if (file.size > maxSizeBytes) {
+                            errorSpan.textContent = 'File ' + file.name + ' is too large.';
+                            return false;
+                        }
+
+                        let fileExt = file.name.split('.').pop().toLowerCase();
+                        let restriction = fileSettings.restriction || 'all';
+                        let allowedExtensions = [];
+
+                        if (restriction === 'image') allowedExtensions = ['jpeg', 'jpg', 'svg', 'png', 'tiff', 'tif', 'webp'];
+                        else if (restriction === 'document') allowedExtensions = ['pdf', 'doc', 'docx', 'html', 'htm', 'xls', 'xlsx', 'txt'];
+                        else if (restriction === 'custom') {
+                            let customInput = fileSettings.custom_ext || '';
+                            allowedExtensions = customInput.toLowerCase().split(',').map((ext) => ext.trim().replace('.', '')).filter(Boolean);
+                        }
+
+                        if (restriction !== 'all' && !allowedExtensions.includes(fileExt)) {
+                            errorSpan.textContent = 'Invalid type. Allowed: ' + allowedExtensions.join(', ');
+                            return false;
+                        }
+                    }
+
+                    errorSpan.textContent = '';
+                    return true;
+                }
+
+                function uploadFileToShopify(file) {
+                    let formData = new FormData();
+                    formData.append('swatch_image', file);
+                    formData.append('shop', '{{ shop.permanent_domain }}');
+
+                    return fetch('/apps/test-app/upload-to-shopify', {
+                        method: 'POST',
+                        body: formData
+                    })
+                    .then((res) => res.json())
+                    .then((data) => {
+                        if (!data.success || !data.url) {
+                            throw new Error(data.message || 'Upload failed.');
+                        }
+                        return data.url;
+                    });
+                }
+
+                function addUploadedFile(file, url) {
+                    let hiddenInput = document.createElement('input');
+                    hiddenInput.type = 'hidden';
+                    hiddenInput.name = (maxQty > 1) ? `properties[${opt.label}][]` : `properties[${opt.label}]`;
+                    hiddenInput.value = url;
+                    if (fileSettings.price) {
+                        hiddenInput.dataset.price = fileSettings.price;
+                    }
+                    wrapper.appendChild(hiddenInput);
+
+                    let entry = {
+                        file: file,
+                        hiddenInput: hiddenInput,
+                        objectUrl: ''
+                    };
+
+                    uploadedFiles.push(entry);
+
+                    if (maxQty === 1) {
+                        previewBox.querySelector('.preview-filename').textContent = file.name;
+                        let img = previewBox.querySelector('.preview-thumb-img');
+                        let icon = previewBox.querySelector('.preview-file-icon');
+
+                        if (file.type.startsWith('image/')) {
+                            entry.objectUrl = URL.createObjectURL(file);
+                            img.src = entry.objectUrl;
+                            img.style.display = 'block';
+                            icon.style.display = 'none';
+                        } else {
+                            img.style.display = 'none';
+                            icon.style.display = 'block';
+                        }
+
+                        uploadBox.style.display = 'none';
+                        previewBox.style.display = 'flex';
+                    } else {
+                        let fileItem = document.createElement('div');
+                        fileItem.className = 'file-item';
+                        fileItem.style.marginBottom = '5px';
+                        fileItem.innerHTML = `<span>${file.name}</span> <span class="remove-btn" style="cursor:pointer; color:red;"> ✖</span>`;
+                        fileItem.querySelector('.remove-btn').addEventListener('click', () => {
+                            removeUploadedEntry(entry);
+                            fileItem.remove();
+                            clearError(wrapper);
+                        });
+                        fileListContainer.appendChild(fileItem);
+                    }
+                }
+
+                fileInput.addEventListener('change', function () {
+                    if (!this.files || this.files.length === 0) return;
+
+                    let newFiles = Array.from(this.files);
+                    let errorSpan = getErrorSpan();
+                    let loaderBox = uploadBox.querySelector('.loader-container');
+                    let successBox = uploadBox.querySelector('.success-container');
+
+                    if (!validateSelectedFiles(newFiles, errorSpan)) {
+                        this.value = '';
+                        return;
+                    }
+
+                    setOverlay(loaderBox, 'flex');
+                    setOverlay(successBox, 'none');
+
+                    Promise.all(newFiles.map((file) => uploadFileToShopify(file).then((url) => ({ file, url }))))
+                    .then((results) => {
+                        results.forEach((result) => addUploadedFile(result.file, result.url));
+                        setOverlay(loaderBox, 'none');
+                        setOverlay(successBox, 'flex');
+                        setTimeout(() => setOverlay(successBox, 'none'), 3000);
+                        updateOptionPriceDisplay();
+                    })
+                    .catch((err) => {
+                        setOverlay(loaderBox, 'none');
+                        errorSpan.textContent = err.message || 'Upload failed due to network error.';
+                    })
+                    .finally(() => {
+                        this.value = '';
+                    });
+                });
+
+                previewBox.querySelector('.remove-file-btn').addEventListener('click', function (e) {
+                    e.stopPropagation();
+                    fileInput.value = '';
+                    uploadedFiles.slice().forEach((entry) => removeUploadedEntry(entry));
+                    previewBox.style.display = 'none';
+                    uploadBox.style.display = 'flex';
+                    clearError(wrapper);
+                });
+
+                wrapper.appendChild(fileInput);
+                wrapper.appendChild(uploadBox);
+                wrapper.appendChild(previewBox);
+                wrapper.appendChild(fileListContainer);
+
+                if (Number(opt.required) === 1 && form) {
+                    form.addEventListener('submit', function (e) {
+                        if (uploadedFiles.length > 0) return;
+
+                        e.preventDefault();
+                        let errorSpan = getErrorSpan();
+                        errorSpan.textContent = 'Please upload a file.';
+                        uploadBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    });
+                }
+
+            return wrapper;
+
+            case 'date':
+                input = document.createElement('input');
+                input.type = 'text';
+                input.className = 'custom-option-field flatpickr-date';
+                input.name = `properties[${opt.label}]`;
+                input.placeholder = 'Select Date & Time';
+                if (Number(opt.required) === 1) input.required = true;
+
+                setTimeout(() => {
+                flatpickr(input, {
+                    enableTime: true,
+                    dateFormat: 'Y-m-d H:i',
+                    minDate: 'today',
+                    time_24hr: false,
+                });
+                }, 100);
+            break;
+
+            case 'button':
+                let btnWrap = document.createElement('div');
+                btnWrap.className = 'custom-button-container';
+                let hiddenBtnInput = document.createElement('input');
+                hiddenBtnInput.type = 'hidden';
+                hiddenBtnInput.name = `properties[${opt.label}]`;
+                if (Number(opt.required) === 1) hiddenBtnInput.required = true;
+                btnWrap.appendChild(hiddenBtnInput);
+
+                if (values.length > 0) {
+                values.forEach((v) => {
+                    let btn = document.createElement('button');
+                    btn.type = 'button';
+                    btn.className = 'custom-button-item';
+                    let pNum = parseFloat(v.price);
+                    let priceLabel = (pNum && pNum > 0) ? ` (+${v.price})` : '';
+                    btn.innerText = v.name + priceLabel;
+                    btn.addEventListener('click', function () {
+                    btnWrap.querySelectorAll('.custom-button-item').forEach((b) => b.classList.remove('active'));
+                    this.classList.add('active');
+                    hiddenBtnInput.value = v.name;
+                    hiddenBtnInput.dataset.price = v.price || 0;
+                    updateOptionPriceDisplay();
+                    });
+                    btnWrap.appendChild(btn);
+                });
+                }
+            return btnWrap;
+
+            case 'popup':
+                let popupWrapper = document.createElement('div');
+                popupWrapper.className = 'custom-popup-wrapper';
+                let linkText = 'View details';
+                let popupContent = '';
+                try {
+                let parsed = JSON.parse(opt.values);
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                    if (parsed[0].popup_label) linkText = parsed[0].popup_label;
+                    if (parsed[0].content) popupContent = parsed[0].content;
+                }
+                } catch (e) {}
+
+                let link = document.createElement('a');
+                link.href = '#';
+                link.className = 'custom-popup-trigger';
+                link.innerHTML = linkText;
+
+                let modalId = 'modal-' + Math.random().toString(36).substr(2, 9);
+                let modalHTML = `<div id="${modalId}" class="custom-modal-overlay" style="display:none;"><div class="custom-modal-content"><span class="custom-modal-close">&times;</span><div class="custom-modal-body">${popupContent}</div></div></div>`;
+
+                let modalContainer = document.createElement('div');
+                modalContainer.innerHTML = modalHTML;
+                document.body.appendChild(modalContainer.firstElementChild);
+
+                link.addEventListener('click', (e) => {
+                e.preventDefault();
+                document.getElementById(modalId).style.display = 'flex';
+                });
+                let modalEl = document.getElementById(modalId);
+                modalEl
+                .querySelector('.custom-modal-close')
+                .addEventListener('click', () => (modalEl.style.display = 'none'));
+                window.addEventListener('click', (e) => {
+                if (e.target == modalEl) modalEl.style.display = 'none';
+                });
+
+                popupWrapper.appendChild(link);
+            return popupWrapper;
+
+            case 'paragraph':
+                let paraWrapper = document.createElement('div');
+                paraWrapper.className = 'custom-paragraph-wrapper';
+                let contentText = opt.label;
+                let hideLabel = false;
+                try {
+                let parsed = JSON.parse(opt.values);
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                    if (parsed[0].content) contentText = parsed[0].content;
+                    if (parsed[0].hide_label) hideLabel = true;
+                }
+                } catch (e) {}
+
+                let pDiv = document.createElement('div');
+                pDiv.className = 'rte-content';
+                pDiv.innerHTML = contentText;
+                pDiv.style.marginBottom = '15px';
+                paraWrapper.appendChild(pDiv);
+
+                if (hideLabel) {
+                setTimeout(() => {
+                    let wrapperDiv = paraWrapper.parentElement;
+                    if (wrapperDiv) {
+                    let label = wrapperDiv.querySelector('label');
+                    if (label) label.style.display = 'none';
+                    }
+                }, 50);
+                }
+            return paraWrapper;
+
+            case 'divider':
+                let divWrapper = document.createElement('div');
+                divWrapper.className = 'custom-divider-wrapper';
+                let dSize = '1px',
+                dColor = '#000',
+                dStyle = 'solid',
+                dVisible = false;
+                try {
+                let parsed = JSON.parse(opt.values);
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                    dSize = parsed[0].size + 'px';
+                    dColor = parsed[0].color;
+                    dStyle = parsed[0].style;
+                    dVisible = parsed[0].visible_in_app;
+                }
+                } catch (e) {}
+
+                let hr = document.createElement('hr');
+                hr.style.cssText = `border:none; border-top-width:${dSize}; border-top-style:${dStyle}; border-top-color:${dColor}; margin:15px 0; opacity:1;`;
+                divWrapper.appendChild(hr);
+
+                setTimeout(() => {
+                let parentDiv = divWrapper.parentElement;
+                if (parentDiv) {
+                    if (dVisible) parentDiv.style.display = 'none';
+                    let label = parentDiv.querySelector('label');
+                    if (label) label.style.display = 'none';
+                }
+                }, 50);
+            return divWrapper;
+
+            default:
+                return null;
+            }
+
+            if (opt.type !== 'radio' && opt.type !== 'paragraph' && opt.type !== 'header') {
+                input.name = `properties[${opt.label}]`;
+                input.className = 'custom-option-field';
+                if (Number(opt.required) === 1) input.required = true;
+            }
+
+            if (input) {
+                if (!input.name) input.name = `properties[${opt.label}]`;
+                input.dataset.optionId = optDbId;
+                input.dataset.optionName = opt.label;
+                if (!input.dataset.valueId) input.dataset.valueId = optDbId + '_val_0';
+            }
+
+            return input;
+        }
+
+    });
+  </script>
+
+  <style>
+
+    .upload-status {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        margin: 10px 0;
+        min-height: 30px;
+    }
+    .loader {
+        border: 3px solid #f3f3f3;
+        border-top: 3px solid #3498db;
+        border-radius: 50%;
+        width: 20px;
+        height: 20px;
+        animation: spin 1s linear infinite;
+        margin-right: 10px;
+    }
+
+
+
+    .loader {
+        border: 3px solid #f3f3f3;
+        border-top: 3px solid #000;
+        border-radius: 50%;
+        width: 24px;
+        height: 24px;
+        animation: spin 1s linear infinite;
+    }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+    .file-error-msg {
+        color: #d82c0d !important;
+        font-size: 12px;
+        font-weight: 700;
+        margin-top: 5px;
+        font-weight: 500;
+    }
+
+    .custom-options-container div:empty {
+        display: block !important;
+    }
+
+    .custom-swatch-container div:empty,
+    .custom-file-wrapper div:empty {
+        display: block !important;
+    }
+    .custom-options-container {
+      padding-top: 16px;
+      padding-bottom: 16px;
+      margin-bottom: 24px;
+      background: transparent;
+    }
+
+    .custom-options-container label {
+      font-size: 14px;
+      color: #374151;
+    }
+
+    .custom-option-field,
+    .custom-options-container textarea,
+    .custom-options-container select,
+    .custom-options-container input:not([type='checkbox']):not([type='radio']) {
+      width: 100%;
+      padding: 10px;
+      font-size: 14px;
+      border-radius: 6px;
+      border: 1px solid #d1d5db;
+      background-color: #ffffff;
+      margin-top: 4px;
+      outline: none;
+    }
+
+    .custom-options-container h4 {
+      margin: 0 0 10px 0;
+      font-size: 16px;
+    }
+    .custom-options-container p {
+      margin: 0 0 10px 0;
+      color: #666;
+      font-size: 14px;
+    }
+    .custom-toggle-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-top: 6px;
+    }
+    .custom-toggle-switch {
+      position: relative;
+      display: inline-block;
+      width: 44px;
+      height: 24px;
+      margin-bottom: 0;
+    }
+    .custom-toggle-switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .custom-toggle-slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: #ccc;
+      transition: 0.4s;
+      border-radius: 34px;
+    }
+    .custom-toggle-slider:before {
+      position: absolute;
+      content: '';
+      height: 18px;
+      width: 18px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      transition: 0.4s;
+      border-radius: 50%;
+    }
+    .custom-toggle-switch input:checked + .custom-toggle-slider {
+      background-color: #000;
+    }
+    .custom-toggle-switch input:checked + .custom-toggle-slider:before {
+      transform: translateX(20px);
+    }
+    .custom-toggle-text {
+      font-size: 14px;
+      color: #333;
+      font-weight: 500;
+    }
+
+    .custom-dropdown-container {
+      position: relative;
+      width: 100%;
+      margin-top: 4px;
+      font-family: inherit;
+      user-select: none;
+    }
+    .custom-dropdown-selected {
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      padding: 8px 12px;
+      background: #fff;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 44px;
+    }
+    .custom-dropdown-options {
+      position: absolute;
+      top: 105%;
+      left: 0;
+      width: 100%;
+      background: #fff;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      z-index: 10000;
+      max-height: 250px;
+      overflow-y: auto;
+      display: none;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    }
+    .custom-dropdown-options.open {
+      display: block;
+    }
+    .custom-option-item {
+      padding: 10px 12px;
+      display: flex;
+      align-items: center;
+      cursor: pointer;
+      border-bottom: 1px solid #f0f0f0;
+      transition: background 0.2s;
+    }
+    .custom-option-item:hover {
+      background-color: #f9fafb;
+    }
+    .option-thumb {
+      width: 36px;
+      height: 36px;
+      object-fit: cover;
+      border-radius: 4px;
+      margin-right: 12px;
+      border: 1px solid #eee;
+    }
+
+    .custom-date-time-wrapper {
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+      background: #f9f9f9;
+      padding: 10px;
+      border-radius: 6px;
+      border: 1px solid #eee;
+    }
+
+    .custom-date-time-wrapper input[type='date'],
+    .custom-date-time-wrapper input[type='time'] {
+      appearance: none;
+      -webkit-appearance: none;
+      background-color: #fff;
+    }
+
+    .option-thumb-placeholder {
+      width: 36px;
+      height: 36px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #f3f3f3;
+      border-radius: 4px;
+      margin-right: 12px;
+      font-size: 18px;
+    }
+    .option-text {
+      font-size: 14px;
+      color: #333;
+    }
+    .arrow {
+      font-size: 15px;
+      color: #666;
+    }
+    .custom-swatch-container {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 5px;
+    }
+    .custom-swatch-item {
+      width: 60px;
+      height: 60px;
+      border-radius: 10%;
+      cursor: pointer;
+      background-size: cover;
+      background-position: center;
+      border: 2px solid transparent;
+      box-shadow: 0 0 0 1px #ccc;
+      transition: all 0.2s ease;
+    }
+    .custom-swatch-item:hover {
+      transform: scale(1.1);
+    }
+    .custom-swatch-item.active {
+      box-shadow: 0 0 0 2px #fff, 0 0 0 4px #000;
+    }
+    .custom-file-wrapper {
+      margin-top: 5px;
+      width: 100%;
+    }
+    .file-upload-box {
+      border: 1px dashed #ccc;
+      border-radius: 4px;
+      padding: 12px;
+      background: #fff;
+      cursor: pointer;
+      text-align: center;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    .file-upload-box:hover {
+      background-color: #f9f9f9;
+      border-color: #999;
+    }
+    .upload-inner-content {
+      display: flex;
+      flex-direction: column;
+      row-gap: 10px;
+    }
+    .upload-btn-text {
+      font-weight: 600;
+      font-size: 13px;
+      color: #333;
+      background: #fff;
+      border: 1px solid #ccc;
+      padding: 4px 10px;
+      border-radius: 4px;
+      margin-right: 8px;
+    }
+    .file-preview-box {
+      border: 1px solid #e1e3e5;
+      border-radius: 4px;
+      padding: 8px 12px;
+      background: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .preview-content-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      overflow: hidden;
+    }
+    .preview-thumb-img {
+      width: 35px;
+      height: 35px;
+      object-fit: cover;
+      border-radius: 3px;
+      border: 1px solid #eee;
+    }
+    .preview-filename {
+      font-size: 13px;
+      color: #005bd3;
+      text-overflow: ellipsis;
+      overflow: hidden;
+      white-space: nowrap;
+      max-width: 180px;
+    }
+    .remove-file-btn {
+      cursor: pointer;
+      color: #999;
+      font-size: 16px;
+      padding: 0 5px;
+    }
+    .remove-file-btn:hover {
+      color: #d82c0d;
+    }
+    .rte-content {
+      font-size: 15px;
+      line-height: 1.6;
+      color: #333;
+      margin-bottom: 10px;
+    }
+    .rte-content p {
+      margin-bottom: 10px;
+    }
+    .rte-content ul,
+    .rte-content ol {
+      margin-left: 20px;
+      list-style-position: outside;
+    }
+    .rte-content a {
+      color: #2c6ecb;
+      text-decoration: underline;
+    }
+    .rte-content strong {
+      font-weight: 700;
+    }
+    .custom-button-container {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 5px;
+    }
+    .custom-button-item {
+      background-color: #fff;
+      color: #333;
+      border: 1px solid #333;
+      border-radius: 4px;
+      padding: 8px 16px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      outline: none;
+    }
+    .custom-button-item:hover {
+      background-color: #f4f4f4;
+    }
+    .custom-button-item.active {
+      background-color: #000;
+      color: #fff;
+      border-color: #000;
+    }
+    .custom-popup-wrapper {
+      margin-bottom: 10px;
+    }
+    .custom-popup-trigger {
+      color: #374151;
+      text-decoration: underline;
+      font-size: 14px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .custom-popup-trigger:hover {
+      color: #1f5199;
+    }
+    .custom-modal-overlay {
+      position: fixed;
+      z-index: 99999;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 100%;
+      overflow: auto;
+      background-color: rgba(0, 0, 0, 0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .custom-modal-content {
+      background-color: #fefefe;
+      margin: auto;
+      padding: 20px;
+      border: 1px solid #888;
+      width: 90%;
+      max-width: 600px;
+      border-radius: 8px;
+      box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+      position: relative;
+      max-height: 80vh;
+      overflow-y: auto;
+    }
+    .custom-modal-close {
+      color: #aaa;
+      float: right;
+      font-size: 28px;
+      font-weight: bold;
+      cursor: pointer;
+      line-height: 1;
+      margin-bottom: 10px;
+      margin-top: -15px;
+    }
+    .custom-modal-close:hover,
+    .custom-modal-close:focus {
+      color: black;
+      text-decoration: none;
+      cursor: pointer;
+    }
+    .custom-modal-body {
+      margin-top: 15px;
+      font-size: 15px;
+      line-height: 1.6;
+      color: #333;
+      border-top: 1px solid gray;
+      padding-top: 10px;
+    }
+    .custom-modal-body p {
+      margin-bottom: 10px;
+    }
+    .custom-modal-body img {
+      max-width: 100%;
+      height: auto;
+    }
+  </style>
+{% endif %}
+
+{% schema %}
+{
+  "name": "Product Options Form",
+  "target": "body",
+  "settings": [],
+  "templates": ["product"]
+}
+{% endschema %}

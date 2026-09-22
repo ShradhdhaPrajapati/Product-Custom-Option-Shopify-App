@@ -1,5 +1,4 @@
 {% if template.name == 'product' and shop.metafields.productcustomoption.enabled == 1 %}
-
   <meta name="csrf-token" content="{{ shop.domain }}">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
   <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
@@ -108,11 +107,12 @@
             }
           }
 
-          if (!isNaN(price) && price > 0 && valText) {
+          let cleanValText = valText.replace(/\s*\(\+[^)]+\)\s*$/, '');
+          if (!isNaN(price) && price > 0 && cleanValText) {
             addonItems.push({
               id: valId,
               name: optName,
-              value: valText,
+              value: cleanValText,
               price: price
             });
           }
@@ -272,8 +272,6 @@
           mirror.value = value;
           form.appendChild(mirror);
         });
-
-        console.log('Custom option properties ready:', getSelectedProperties());
       }
 
       function isCartAddUrl(url) {
@@ -341,7 +339,6 @@
           event.formData.delete(name + '[]');
         });
         getSelectedProperties().forEach(([name, value]) => event.formData.append(name, value));
-        console.log('Custom option formdata properties:', getSelectedProperties());
       });
 
       if (!window.__productCustomOptionFetchPatched) {
@@ -361,8 +358,6 @@
               requestOptions.method = requestOptions.method || 'POST';
               requestOptions.body = addPropertiesToBody(new FormData(form));
             }
-
-            console.log('Custom option patched /cart/add request:', getSelectedProperties());
           }
 
           return originalFetch.call(window, resource, requestOptions);
@@ -384,8 +379,6 @@
         },
       })
         .then((response) => {
-          console.log('Response Status:', response.status);
-          console.log('Response OK:', response.ok);
 
           if (!response.ok) {
             throw new Error('Network response was not ok');
@@ -394,7 +387,6 @@
           return response.json();
         })
         .then((result) => {
-          console.log('API Response:', result);
 
           if (result && result.helper_variant_id) {
             helperVariantId = result.helper_variant_id;
@@ -410,8 +402,6 @@
             finalData = result;
           }
 
-          console.log('Final Data:', finalData);
-
           if (finalData.length > 0) {
             renderOptions(finalData);
             attachPropertiesToProductForm();
@@ -422,8 +412,6 @@
         })
         .catch((error) => {
           console.error('Fetch Error:', error);
-          console.error('API URL:', apiUrl);
-
           container.remove();
         });
 
@@ -461,9 +449,19 @@
             if (!['paragraph', 'header', 'divider'].includes(opt.type)) {
                 let label = document.createElement('label');
                 label.innerText = opt.label;
+
+                if (opt.type === 'file') {
+                    const filePrice = optionPriceLookup[opt.label + '::file'] || 0;
+
+                    if (filePrice > 0) {
+                        label.innerText += ` (+${filePrice})`;
+                    }
+                }
                 label.style.fontWeight = '600';
                 label.style.display = 'block';
                 label.style.marginBottom = '5px';
+
+
 
                 if (Number(opt.required) === 1) {
                 label.innerHTML += ' <span style="color:red">*</span>';
@@ -557,7 +555,7 @@
                 values.forEach((v, i) => {
                     let pNum = parseFloat(v.price);
                     let priceLabel = (pNum && pNum > 0) ? ` (+${v.price})` : '';
-                    let optEl = new Option(v.name + priceLabel, v.name);
+                    let optEl = new Option(v.name + priceLabel, v.name + priceLabel);
                     optEl.dataset.price = v.price || 0;
                     optEl.dataset.optionId = optDbId;
                     optEl.dataset.optionName = opt.label;
@@ -577,7 +575,7 @@
                     let valId = (v && v.id) ? String(v.id) : (optDbId + '_val_' + i);
                     checkWrap.innerHTML += `
                 <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
-                    <input type="checkbox" id="${id}" name="properties[${opt.label}][]" value="${v.name}" data-price="${v.price || 0}" data-option-id="${optDbId}" data-option-name="${opt.label}" data-value-id="${valId}">
+                    <input type="checkbox" id="${id}" name="properties[${opt.label}][]" value="${v.name}${priceLabel}" data-price="${v.price || 0}" data-option-id="${optDbId}" data-option-name="${opt.label}" data-value-id="${valId}">
                     <label for="${id}" style="margin:0; cursor:pointer;">${v.name}${priceLabel}</label>
                 </div>`;
                 });
@@ -604,7 +602,7 @@
                     let valId = (v && v.id) ? String(v.id) : (optDbId + '_val_' + i);
                     radioWrap.innerHTML += `
                 <div style="display:flex; align-items:center; gap:5px; margin-bottom:5px;">
-                    <input type="radio" id="${id}" name="properties[${opt.label}]" value="${v.name}" data-price="${v.price || 0}" data-option-id="${optDbId}" data-option-name="${opt.label}" data-value-id="${valId}">
+                    <input type="radio" id="${id}" name="properties[${opt.label}]" value="${v.name}${priceLabel}" data-price="${v.price || 0}" data-option-id="${optDbId}" data-option-name="${opt.label}" data-value-id="${valId}">
                     <label for="${id}" style="margin:0; cursor:pointer;">${v.name}${priceLabel}</label>
                 </div>`;
                 });
@@ -650,7 +648,7 @@
                 let pNum = parseFloat(activeVal.price);
                 let priceLabel = (pNum && pNum > 0) ? ` (+${activeVal.price})` : '';
                 textLabel.textContent = activeVal.name + priceLabel;
-                hiddenSwitchInput.value = activeVal.name;
+                hiddenSwitchInput.value = activeVal.name + priceLabel;
                 hiddenSwitchInput.dataset.price = activeVal.price || 0;
                 updateOptionPriceDisplay();
                 }
@@ -689,7 +687,7 @@
                         itemDiv.addEventListener('click', function () {
                         swatchWrap.querySelectorAll('.custom-swatch-item').forEach((el) => el.classList.remove('active'));
                         this.classList.add('active');
-                        hiddenSwatchInput.value = v.name;
+                        hiddenSwatchInput.value = v.name + priceLabel;
                         hiddenSwatchInput.dataset.price = v.price || 0;
                         updateOptionPriceDisplay();
                         });
@@ -736,7 +734,7 @@
 
                     selectedDiv.innerHTML = `${imgHTML} <span class="option-text">${v.name}</span> <span class="arrow">▼</span>`;
                     selectedDiv.style.borderColor = '#d1d5db';
-                    hiddenInput.value = v.name;
+                    hiddenInput.value = v.name + priceLabel;
                     hiddenInput.dataset.price = v.price || 0;
                     optionsList.classList.remove('open');
                     updateOptionPriceDisplay();
@@ -1192,51 +1190,55 @@
   </script>
 
   <style>
-
     .upload-status {
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        margin: 10px 0;
-        min-height: 30px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      margin: 10px 0;
+      min-height: 30px;
     }
     .loader {
-        border: 3px solid #f3f3f3;
-        border-top: 3px solid #3498db;
-        border-radius: 50%;
-        width: 20px;
-        height: 20px;
-        animation: spin 1s linear infinite;
-        margin-right: 10px;
+      border: 3px solid #f3f3f3;
+      border-top: 3px solid #3498db;
+      border-radius: 50%;
+      width: 20px;
+      height: 20px;
+      animation: spin 1s linear infinite;
+      margin-right: 10px;
     }
-
-
 
     .loader {
-        border: 3px solid #f3f3f3;
-        border-top: 3px solid #000;
-        border-radius: 50%;
-        width: 24px;
-        height: 24px;
-        animation: spin 1s linear infinite;
+      border: 3px solid #f3f3f3;
+      border-top: 3px solid #000;
+      border-radius: 50%;
+      width: 24px;
+      height: 24px;
+      animation: spin 1s linear infinite;
     }
-    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    @keyframes spin {
+      0% {
+        transform: rotate(0deg);
+      }
+      100% {
+        transform: rotate(360deg);
+      }
+    }
 
     .file-error-msg {
-        color: #d82c0d !important;
-        font-size: 12px;
-        font-weight: 700;
-        margin-top: 5px;
-        font-weight: 500;
+      color: #d82c0d !important;
+      font-size: 12px;
+      font-weight: 700;
+      margin-top: 5px;
+      font-weight: 500;
     }
 
     .custom-options-container div:empty {
-        display: block !important;
+      display: block !important;
     }
 
     .custom-swatch-container div:empty,
     .custom-file-wrapper div:empty {
-        display: block !important;
+      display: block !important;
     }
     .custom-options-container {
       padding-top: 16px;

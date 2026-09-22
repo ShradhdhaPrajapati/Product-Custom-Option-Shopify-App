@@ -21,9 +21,9 @@ class OptionSetController extends Controller
 
     public function index(Request $request)
     {
-       
+
         try {
-           
+
             // Get shop domain (iframe / fallback)
             $shopDomain = $request->get('shop');
 
@@ -58,14 +58,6 @@ class OptionSetController extends Controller
                 'isAppEnable' => $isAppEnable,
             ];
 
-            \Log::info('CONFIG SHOP DEBUG', [
-                'request_shop' => $request->get('shop'),
-                'auth_shop' => Auth::user()?->shop,
-                'final_shop' => $shopDomain,
-                'app_id' => $appId,
-                'shop_id' => $shop?->id,
-                'sets_count' => $sets->count(),
-            ]);
 
             return view('productcustomoption_configuration', compact('response', 'sets'));
         } catch (\Exception $e) {
@@ -131,7 +123,6 @@ class OptionSetController extends Controller
             DB::commit();
             $this->syncMetafieldToShopify($shopModel, $appId);
             return response()->json(['success' => true]);
-
         } catch (\Exception $e) {
             DB::rollBack();
             return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
@@ -337,7 +328,7 @@ class OptionSetController extends Controller
 
     public function getOptionsForFrontend(Request $request)
     {
-       
+
         $shopDomain = $request->get('shop');
         $productId = (string) $request->get('product_id');
 
@@ -385,7 +376,7 @@ class OptionSetController extends Controller
                 'helper_variant_id' => $helperVariantId
             ], 200)->withHeaders($headers);
         } catch (\Exception $e) {
-           
+
             return response()->json(['success' => false, 'message' => $e->getMessage()], 500)->withHeaders($headers);
         }
     }
@@ -403,13 +394,13 @@ class OptionSetController extends Controller
             return response()->json(['products' => []]);
         }
         $ids = $request->input('ids');
-       
+
 
         if (empty($ids)) {
             return response()->json(['products' => []]);
         }
 
-        $formattedIds = array_map(function($id) {
+        $formattedIds = array_map(function ($id) {
             return strpos($id, 'gid://') !== false ? $id : 'gid://shopify/Product/' . $id;
         }, $ids);
 
@@ -493,7 +484,6 @@ class OptionSetController extends Controller
             }
 
             return response()->json(['success' => true, 'url' => $cdnUrl]);
-
         } catch (\Exception $e) {
             return response()->json(['success' => false, 'message' => $e->getMessage()]);
         }
@@ -546,7 +536,6 @@ class OptionSetController extends Controller
         $httpClient = new \GuzzleHttp\Client();
         try {
             $response = $httpClient->post($target['url'], ['multipart' => $formData]);
-           
         } catch (\GuzzleHttp\Exception\ClientException $e) {
             \Log::error('Guzzle Client Error: ' . $e->getResponse()->getBody()->getContents());
             return null;
@@ -576,12 +565,12 @@ class OptionSetController extends Controller
         ]);
 
         $body = $finalResponse->getDecodedBody();
-       
+
 
         $fileData = $body['data']['fileCreate']['files'][0] ?? null;
 
         if (!isset($fileData['image']['url']) && isset($fileData['id'])) {
-    
+
             sleep(4);
 
             $fetchQuery = <<<'QUERY'
@@ -618,16 +607,32 @@ class OptionSetController extends Controller
             // 1. Query Shopify for existing helper product & Shop Metafield
             $query = <<<'QUERY'
             query getHelperProduct {
-                products(first: 5, query: "title:'Custom Option Add-On'") {
+                products(first: 10, query: "title:'Custom Option Fee' OR title:'Custom Option Add-On'") {
                     nodes {
                         id
                         title
                         status
+                        media(first: 10) {
+                            nodes {
+                                id
+                                status
+                                ... on MediaImage {
+                                    image {
+                                        id
+                                        url
+                                    }
+                                }
+                            }
+                        }
                         variants(first: 5) {
                             nodes {
                                 id
                                 title
                                 price
+                                image {
+                                    id
+                                    url
+                                }
                             }
                         }
                     }
@@ -648,31 +653,103 @@ class OptionSetController extends Controller
             $storedMetafieldVal = $body['data']['shop']['metafield']['value'] ?? null;
             $shopGid = $body['data']['shop']['id'] ?? null;
 
-            // Check if existing product node matching title "Custom Option Add-On" exists
+            // Check if existing product node matching title "Custom Option Add-On" or "Custom Option Fee" exists
             foreach ($products as $prod) {
-                if (($prod['title'] ?? '') === 'Custom Option Add-On') {
+                if (in_array(($prod['title'] ?? ''), ['Custom Option Add-On', 'Custom Option Fee'])) {
                     $firstVariant = $prod['variants']['nodes'][0] ?? null;
                     if ($firstVariant && !empty($firstVariant['id'])) {
                         $variantGid = $firstVariant['id'];
+                        $productId = $prod['id'] ?? null;
+
+                        // Inspect all media nodes on the helper product
+                        $mediaNodes = $prod['media']['nodes'] ?? [];
+                        $validMediaId = null;
+                        $invalidMediaIds = [];
+
+                        foreach ($mediaNodes as $mNode) {
+                            $mId = $mNode['id'] ?? null;
+                            $mStatus = $mNode['status'] ?? null;
+                            $mUrl = $mNode['image']['url'] ?? null;
+
+                            if ($mStatus === 'READY' && !empty($mUrl)) {
+                                if (!$validMediaId) {
+                                    $validMediaId = $mId;
+                                }
+                            } elseif ($mStatus === 'PROCESSING') {
+                                // Poll processing media to see if it becomes READY before treating as invalid
+                                $polledNode = $this->waitForMediaReady($client, $mId);
+                                if ($polledNode && ($polledNode['status'] ?? '') === 'READY' && !empty($polledNode['image']['url'])) {
+                                    if (!$validMediaId) {
+                                        $validMediaId = $polledNode['id'] ?? $mId;
+                                    }
+                                } else {
+                                    if ($mId) {
+                                        $invalidMediaIds[] = $mId;
+                                    }
+                                }
+                            } elseif ($mStatus === 'FAILED') {
+                                if ($mId) {
+                                    $invalidMediaIds[] = $mId;
+                                }
+                            }
+                        }
+
+                        $variantHasValidImage = !empty($firstVariant['image']['id']) && !empty($firstVariant['image']['url']);
+
+                        if ($productId) {
+                            // If existing helper product has title "Custom Option Fee", update to "Custom Option Add-On" for checkout/cart display
+                            if (($prod['title'] ?? '') === 'Custom Option Fee') {
+                                $this->updateHelperProductTitle($client, $productId, 'Custom Option Add-On');
+                            }
+
+                            // Clean up invalid/failed media nodes if present
+                            if (!empty($invalidMediaIds)) {
+                                $this->deleteHelperProductMedia($client, $productId, $invalidMediaIds);
+                            }
+
+                            if ($validMediaId) {
+                                // Valid media exists on product. Ensure variant is linked to it.
+                                if (!$variantHasValidImage) {
+                                    $this->linkVariantMedia($client, $productId, $variantGid, $validMediaId);
+                                }
+                            } else {
+                                // No valid READY media on product. Upload and attach fresh media.
+                                $this->attachHelperProductMedia($client, $productId, $variantGid);
+                            }
+                        }
 
                         if ($storedMetafieldVal !== $variantGid && $shopGid) {
                             $this->saveHelperVariantMetafield($client, $shopGid, $variantGid);
                         }
 
-                        \Log::info("Existing helper variant found for {$shopModel->shop}: {$variantGid}");
+                        \Log::info("Existing helper variant verified for {$shopModel->shop}: {$variantGid}");
                         return $variantGid;
                     }
                 }
             }
 
             // 2. Helper product not found; create it using productCreate GraphQL mutation
+            $badgeMediaSource = $this->getBadgeMediaSource($client);
+
             $createMutation = <<<'QUERY'
-            mutation productCreate($input: ProductInput!) {
-                productCreate(input: $input) {
+            mutation productCreate($input: ProductInput!, $media: [CreateMediaInput!]) {
+                productCreate(input: $input, media: $media) {
                     product {
                         id
                         title
                         status
+                        media(first: 1) {
+                            nodes {
+                                id
+                                status
+                                ... on MediaImage {
+                                    image {
+                                        id
+                                        url
+                                    }
+                                }
+                            }
+                        }
                         variants(first: 1) {
                             nodes {
                                 id
@@ -694,8 +771,14 @@ class OptionSetController extends Controller
                     'productType' => 'Custom Option Add-On',
                     'vendor' => 'Product Custom Option',
                     'tags' => ['custom-option-hidden', 'nopublish'],
-                    'descriptionHtml' => '<p>Internal system product for custom option add-on pricing. Do not delete.</p>',
-                ]
+                    'descriptionHtml' => '<p>Internal system product for custom option pricing. Do not delete.</p>',
+                ],
+                'media' => !empty($badgeMediaSource) ? [
+                    [
+                        'originalSource' => $badgeMediaSource,
+                        'mediaContentType' => 'IMAGE'
+                    ]
+                ] : []
             ];
 
             $createResponse = $client->query([
@@ -711,10 +794,48 @@ class OptionSetController extends Controller
                 return null;
             }
 
+            // Product ID
+            $createdProductId = $createBody['product']['id'] ?? null;
+            // Variant ID
             $newVariantGid = $createBody['product']['variants']['nodes'][0]['id'] ?? null;
+            $newMediaId = $createBody['product']['media']['nodes'][0]['id'] ?? null;
+
+            // Set helper variant to product variant price if not extracted
+            if (!$newVariantGid && $createdProductId) {
+                $fetchVariantQuery = <<<'QUERY'
+                query getCreatedProductVariant($id: ID!) {
+                    product(id: $id) {
+                        variants(first: 1) {
+                            nodes {
+                                id
+                            }
+                        }
+                    }
+                }
+                QUERY;
+                $fetchRes = $client->query([
+                    'query' => $fetchVariantQuery,
+                    'variables' => ['id' => $createdProductId]
+                ]);
+                $fetchBody = $fetchRes->getDecodedBody();
+                $newVariantGid = $fetchBody['data']['product']['variants']['nodes'][0]['id'] ?? null;
+            }
 
             if ($newVariantGid) {
                 \Log::info("Successfully created helper product variant for {$shopModel->shop}: {$newVariantGid}");
+
+                if ($createdProductId) {
+                    if ($newMediaId) {
+                        $readyMedia = $this->waitForMediaReady($client, $newMediaId);
+                        if ($readyMedia && !empty($readyMedia['id']) && ($readyMedia['status'] ?? '') === 'READY' && !empty($readyMedia['image']['url'])) {
+                            $this->linkVariantMedia($client, $createdProductId, $newVariantGid, $readyMedia['id']);
+                        } else {
+                            \Log::warning("New product media {$newMediaId} was not confirmed READY; skipping variant link on {$createdProductId}");
+                        }
+                    } elseif (!empty($badgeMediaSource)) {
+                        $this->attachHelperProductMedia($client, $createdProductId, $newVariantGid);
+                    }
+                }
 
                 if ($shopGid) {
                     $this->saveHelperVariantMetafield($client, $shopGid, $newVariantGid);
@@ -723,11 +844,395 @@ class OptionSetController extends Controller
                 return $newVariantGid;
             }
 
-            \Log::error("Failed to extract new variant GID for {$shopModel->shop}");
+            \Log::error("Failed to extract new variant GID for {$shopModel->shop}. Full payload: " . json_encode($createResponse->getDecodedBody()));
             return null;
-
         } catch (\Exception $e) {
             \Log::error("Exception in ensureHelperProductExists for {$shopModel->shop}: " . $e->getMessage());
+            return null;
+        }
+    }
+
+    private function waitForMediaReady($client, $mediaId, $maxAttempts = 8, $delayMicroseconds = 1000000)
+    {
+        if (empty($mediaId)) {
+            return null;
+        }
+
+        $query = <<<'QUERY'
+        query getMediaNode($id: ID!) {
+            node(id: $id) {
+                ... on MediaImage {
+                    id
+                    status
+                    mediaErrors {
+                        code
+                        message
+                        details
+                    }
+                    image {
+                        id
+                        url
+                    }
+                }
+            }
+        }
+        QUERY;
+
+        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+            usleep($delayMicroseconds);
+
+            try {
+                $response = $client->query([
+                    'query' => $query,
+                    'variables' => ['id' => $mediaId]
+                ]);
+
+                $node = $response->getDecodedBody()['data']['node'] ?? null;
+                $status = $node['status'] ?? null;
+                $imageUrl = $node['image']['url'] ?? null;
+
+                if ($status === 'READY' && !empty($imageUrl)) {
+                    \Log::info("MediaImage {$mediaId} is READY on attempt {$attempt}: {$imageUrl}");
+                    return $node;
+                }
+
+                if ($status === 'FAILED') {
+                    $mediaErrors = $node['mediaErrors'] ?? [];
+                    \Log::error("MediaImage {$mediaId} processing FAILED on attempt {$attempt}: " . json_encode($mediaErrors));
+                    return null;
+                }
+
+                \Log::info("MediaImage {$mediaId} status is '{$status}', waiting... (attempt {$attempt}/{$maxAttempts})");
+            } catch (\Exception $e) {
+                \Log::warning("Error polling media {$mediaId} status on attempt {$attempt}: " . $e->getMessage());
+            }
+        }
+
+        \Log::warning("MediaImage {$mediaId} was not confirmed READY after {$maxAttempts} attempts");
+        return null;
+    }
+
+    private function deleteHelperProductMedia($client, $productId, array $mediaIds)
+    {
+        if (empty($mediaIds) || empty($productId)) {
+            return;
+        }
+
+        try {
+            $mutation = <<<'QUERY'
+            mutation productDeleteMedia($productId: ID!, $mediaIds: [ID!]!) {
+                productDeleteMedia(productId: $productId, mediaIds: $mediaIds) {
+                    deletedMediaIds
+                    mediaUserErrors {
+                        field
+                        message
+                    }
+                }
+            }
+            QUERY;
+
+            $res = $client->query([
+                'query' => $mutation,
+                'variables' => [
+                    'productId' => $productId,
+                    'mediaIds' => array_values(array_unique($mediaIds))
+                ]
+            ]);
+
+            $body = $res->getDecodedBody()['data']['productDeleteMedia'] ?? [];
+            $errors = $body['mediaUserErrors'] ?? [];
+            if (!empty($errors)) {
+                \Log::warning("productDeleteMedia returned errors for {$productId}: " . json_encode($errors));
+            } else {
+                \Log::info("Deleted invalid media IDs for product {$productId}: " . json_encode($body['deletedMediaIds'] ?? $mediaIds));
+            }
+        } catch (\Exception $e) {
+            \Log::warning("Exception deleting helper product media for {$productId}: " . $e->getMessage());
+        }
+    }
+
+    private function attachHelperProductMedia($client, $productId, $variantId = null)
+    {
+        try {
+            $badgeMediaSource = $this->getBadgeMediaSource($client);
+            if (empty($badgeMediaSource)) {
+                \Log::warning("No badge media source available for helper product {$productId}");
+                return null;
+            }
+
+            $mutation = <<<'QUERY'
+            mutation productCreateMedia($productId: ID!, $media: [CreateMediaInput!]!) {
+                productCreateMedia(productId: $productId, media: $media) {
+                    media {
+                        id
+                        status
+                    }
+                    mediaUserErrors {
+                        field
+                        message
+                    }
+                    userErrors {
+                        field
+                        message
+                    }
+                }
+            }
+            QUERY;
+
+            $res = $client->query([
+                'query' => $mutation,
+                'variables' => [
+                    'productId' => $productId,
+                    'media' => [
+                        [
+                            'originalSource' => $badgeMediaSource,
+                            'mediaContentType' => 'IMAGE'
+                        ]
+                    ]
+                ]
+            ]);
+
+            $body = $res->getDecodedBody()['data']['productCreateMedia'] ?? [];
+            $userErrors = array_merge($body['userErrors'] ?? [], $body['mediaUserErrors'] ?? []);
+            if (!empty($userErrors)) {
+                \Log::error("Failed to create product media for helper product {$productId}: " . json_encode($userErrors));
+                return null;
+            }
+
+            $rawMediaId = $body['media'][0]['id'] ?? null;
+            if (!$rawMediaId) {
+                \Log::error("No media ID returned by productCreateMedia for helper product {$productId}");
+                return null;
+            }
+
+            // Verify media readiness before linking to variant
+            $readyMediaNode = $this->waitForMediaReady($client, $rawMediaId);
+
+            if ($readyMediaNode && !empty($readyMediaNode['id']) && ($readyMediaNode['status'] ?? '') === 'READY' && !empty($readyMediaNode['image']['url'])) {
+                $finalMediaId = $readyMediaNode['id'];
+
+                if (!$variantId) {
+                    // Fetch first variant ID of helper product if not passed
+                    $fetchQuery = <<<'QUERY'
+                    query getProductVariant($id: ID!) {
+                        product(id: $id) {
+                            variants(first: 1) {
+                                nodes {
+                                    id
+                                }
+                            }
+                        }
+                    }
+                    QUERY;
+                    $variantRes = $client->query([
+                        'query' => $fetchQuery,
+                        'variables' => ['id' => $productId]
+                    ]);
+                    $variantId = $variantRes->getDecodedBody()['data']['product']['variants']['nodes'][0]['id'] ?? null;
+                }
+
+                if ($variantId) {
+                    $this->linkVariantMedia($client, $productId, $variantId, $finalMediaId);
+                }
+
+                \Log::info("Attached and linked verified badge image media {$finalMediaId} to variant {$variantId} for helper product {$productId}");
+                return $finalMediaId;
+            } else {
+                \Log::warning("Media {$rawMediaId} was not confirmed READY; skipping variant link on {$productId}");
+                return null;
+            }
+        } catch (\Exception $e) {
+            \Log::error("Failed to attach helper product media: " . $e->getMessage());
+            return null;
+        }
+    }
+
+    private function linkVariantMedia($client, $productId, $variantId, $mediaId)
+    {
+        try {
+            $bulkUpdateMutation = <<<'QUERY'
+            mutation productVariantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+                productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+                    productVariants {
+                        id
+                        image {
+                            id
+                            url
+                        }
+                    }
+                    userErrors {
+                        field
+                        message
+                    }
+                }
+            }
+            QUERY;
+
+            $res = $client->query([
+                'query' => $bulkUpdateMutation,
+                'variables' => [
+                    'productId' => $productId,
+                    'variants' => [
+                        [
+                            'id' => $variantId,
+                            'mediaId' => $mediaId
+                        ]
+                    ]
+                ]
+            ]);
+
+            $body = $res->getDecodedBody()['data']['productVariantsBulkUpdate'] ?? [];
+            $userErrors = $body['userErrors'] ?? [];
+
+            if (!empty($userErrors)) {
+                \Log::error("Failed to link variant media for {$variantId}: " . json_encode($userErrors));
+                return false;
+            } else {
+                $variantImageUrl = $body['productVariants'][0]['image']['url'] ?? null;
+                \Log::info("Successfully linked media {$mediaId} to variant {$variantId}. Variant image URL: {$variantImageUrl}");
+                return true;
+            }
+        } catch (\Exception $e) {
+            \Log::error("Exception in linkVariantMedia: " . $e->getMessage());
+            return false;
+        }
+    }
+
+    private function getBadgeMediaSource($client)
+    {
+        $possiblePaths = [
+            public_path('images/custom-option-badge.png'),
+        ];
+
+        $imagePath = null;
+        foreach ($possiblePaths as $path) {
+            if (file_exists($path) && is_readable($path)) {
+                $imagePath = $path;
+                break;
+            }
+        }
+
+        if (!$imagePath) {
+            \Log::error("Badge image file custom-option-badge.png not found or not readable. Checked paths: " . json_encode($possiblePaths) . ". Stopping badge media creation.");
+            return null;
+        }
+
+        try {
+            $fileSize = (string) filesize($imagePath);
+            $mimeType = mime_content_type($imagePath) ?: 'image/png';
+
+            $stagedMutation = <<<'QUERY'
+            mutation stagedUploadsCreate($input: [StagedUploadInput!]!) {
+                stagedUploadsCreate(input: $input) {
+                    stagedTargets {
+                        url
+                        resourceUrl
+                        parameters {
+                            name
+                            value
+                        }
+                    }
+                    userErrors {
+                        field
+                        message
+                    }
+                }
+            }
+            QUERY;
+
+            $stagedResponse = $client->query([
+                'query' => $stagedMutation,
+                'variables' => [
+                    'input' => [
+                        [
+                            'resource' => 'IMAGE',
+                            'filename' => basename($imagePath),
+                            'mimeType' => $mimeType,
+                            'httpMethod' => 'POST',
+                            'fileSize' => $fileSize,
+                        ]
+                    ]
+                ]
+            ]);
+
+            $stagedDecoded = $stagedResponse->getDecodedBody();
+            $body = $stagedDecoded['data']['stagedUploadsCreate'] ?? [];
+            $userErrors = $body['userErrors'] ?? [];
+
+            if (!empty($userErrors)) {
+                \Log::error("Shopify stagedUploadsCreate returned userErrors: " . json_encode($userErrors) . ". Stopping badge media creation.");
+                return null;
+            }
+
+            $target = $body['stagedTargets'][0] ?? null;
+            if (!$target) {
+                \Log::error("Shopify stagedUploadsCreate returned no staged targets. Full payload: " . json_encode($stagedDecoded) . ". Stopping badge media creation.");
+                return null;
+            }
+
+            $uploadUrl = $target['url'] ?? null;
+            $resourceUrl = $target['resourceUrl'] ?? null;
+            $parameters = $target['parameters'] ?? [];
+
+            if (!$uploadUrl || !$resourceUrl) {
+                \Log::error("Shopify stagedUploadsCreate missing uploadUrl or resourceUrl: " . json_encode($target) . ". Stopping badge media creation.");
+                return null;
+            }
+
+            $multipart = [];
+            foreach ($parameters as $param) {
+                $multipart[] = [
+                    'name' => $param['name'],
+                    'contents' => (string) $param['value']
+                ];
+            }
+
+            $fileHandle = fopen($imagePath, 'r');
+            if (!$fileHandle) {
+                \Log::error("Failed to open badge image file for reading at {$imagePath}. Stopping badge media creation.");
+                return null;
+            }
+
+            // File must be the last field in the multipart body
+            $multipart[] = [
+                'name' => 'file',
+                'contents' => $fileHandle,
+                'filename' => basename($imagePath),
+                'headers' => [
+                    'Content-Type' => $mimeType
+                ]
+            ];
+
+            try {
+                $guzzle = new \GuzzleHttp\Client(['timeout' => 30]);
+                $uploadRes = $guzzle->post($uploadUrl, [
+                    'multipart' => $multipart
+                ]);
+
+                $statusCode = $uploadRes->getStatusCode();
+                if ($statusCode >= 200 && $statusCode < 300) {
+                    \Log::info("Successfully uploaded badge image to Shopify staged upload: {$resourceUrl}");
+                    return $resourceUrl;
+                } else {
+                    $responseBody = (string) $uploadRes->getBody();
+                    \Log::error("Shopify staged upload POST failed with status {$statusCode}. Response: {$responseBody}. Stopping badge media creation.");
+                    return null;
+                }
+            } catch (\GuzzleHttp\Exception\RequestException $ge) {
+                $resp = $ge->hasResponse() ? (string) $ge->getResponse()->getBody() : 'No response body';
+                $status = $ge->hasResponse() ? $ge->getResponse()->getStatusCode() : 'Unknown';
+                \Log::error("Guzzle RequestException during Shopify staged upload POST (HTTP {$status}): " . $ge->getMessage() . " | Response: " . $resp . ". Stopping badge media creation.");
+                return null;
+            } catch (\Exception $e) {
+                \Log::error("Exception during Shopify staged upload POST: " . $e->getMessage() . ". Stopping badge media creation.");
+                return null;
+            } finally {
+                if (is_resource($fileHandle)) {
+                    fclose($fileHandle);
+                }
+            }
+        } catch (\Exception $e) {
+            \Log::error("Failed Shopify staged upload for badge image: " . $e->getMessage() . ". Stopping badge media creation.");
             return null;
         }
     }
@@ -770,6 +1275,49 @@ class OptionSetController extends Controller
             ]);
         } catch (\Exception $e) {
             \Log::error("Failed to save helper_variant_id metafield: " . $e->getMessage());
+        }
+    }
+
+    private function updateHelperProductTitle($client, $productId, $newTitle)
+    {
+        try {
+            $mutation = <<<'QUERY'
+            mutation productUpdate($input: ProductInput!) {
+                productUpdate(input: $input) {
+                    product {
+                        id
+                        title
+                    }
+                    userErrors {
+                        field
+                        message
+                    }
+                }
+            }
+            QUERY;
+
+            $res = $client->query([
+                'query' => $mutation,
+                'variables' => [
+                    'input' => [
+                        'id' => $productId,
+                        'title' => $newTitle,
+                    ]
+                ]
+            ]);
+
+            $body = $res->getDecodedBody()['data']['productUpdate'] ?? [];
+            $userErrors = $body['userErrors'] ?? [];
+            if (!empty($userErrors)) {
+                \Log::warning("productUpdate returned userErrors updating title for helper product {$productId}: " . json_encode($userErrors));
+                return false;
+            }
+
+            \Log::info("Successfully updated helper product {$productId} title to '{$newTitle}'");
+            return true;
+        } catch (\Exception $e) {
+            \Log::warning("Exception updating helper product title for {$productId}: " . $e->getMessage());
+            return false;
         }
     }
 }

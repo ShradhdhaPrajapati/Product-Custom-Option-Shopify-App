@@ -1,13 +1,13 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "8672ef98ab71361f057a35ab4f33ce97"
+client_id = "1b89fa8a9a973de95f603ec5c8243afc"
 name = "Product Custom Option"
-application_url = "https://unbrief-denny-plashingly.ngrok-free.dev/appinstall/productcustomoption"
+application_url = "https://patience-boat-jogging.ngrok-free.dev/appinstall/productcustomoption"
 embedded = true
-handle = "product-custom-option-apps"
+handle = "product-custom-option-apps-1"
 
 [build]
-dev_store_url = "product-custom-option-test.myshopify.com"
+dev_store_url = "product-custom-option-n8m2lukk.myshopify.com"
 
 [webhooks]
 api_version = "2025-10"
@@ -20,11 +20,11 @@ use_legacy_install_flow = false
 
 [auth]
 redirect_urls = [
-  "https://unbrief-denny-plashingly.ngrok-free.dev/auth/callback"
+  "https://patience-boat-jogging.ngrok-free.dev/auth/callback"
 ]
 
 [app_proxy]
-url = "https://unbrief-denny-plashingly.ngrok-free.dev/api/proxy"
+url = "https://patience-boat-jogging.ngrok-free.dev/api/proxy"
 subpath = "test-app"
 prefix = "apps"
 
